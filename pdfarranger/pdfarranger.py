@@ -979,6 +979,9 @@ class PdfArranger(Gtk.Application):
                     model.remove(model.get_iter(ref_from.get_path()))
 
         elif target == 'MODEL_ROW_EXTERN':
+            if not item and self.is_between_items(iconview, x, y):
+                context.finish(False, False, etime)
+                return
             if not ref_to:
                 data.reverse()
             changed = self.paste_pages(data, before, ref_to, select_added=True)
@@ -1002,8 +1005,33 @@ class PdfArranger(Gtk.Application):
             path = ref_del.get_path()
             model.remove(model.get_iter(path))
 
-    def iv_dnd_motion(self, _iconview, _context, _x, y, _etime):
-        """Handles the drag-motion signal in order to auto-scroll the view"""
+    @staticmethod
+    def is_between_items(iconview, x, y):
+        """Find out if drag location is between items."""
+        model = iconview.get_model()
+        if len(model) == 0:
+            return False
+        last_row = model[-1]
+        x_step = int(iconview.get_item_width() * 0.9)
+        y_step = iconview.get_row_spacing() + 10
+        xy_test = [("LEFT", x - x_step, y), ("RIGHT", x + x_step, y), ("DOWN", x, y + y_step),
+                   ("LEFT-DOWN", x - x_step, y + y_step), ("RIGHT-DOWN", x + x_step, y + y_step)]
+
+        for direction, x_t, y_t in xy_test:
+            if x_t < 0: x_t = 0
+            path = iconview.get_path_at_pos(x_t, y_t)
+            if path and not (path == last_row.path and (direction == "LEFT" or direction == "LEFT-DOWN")):
+                return True
+        return False
+
+    def iv_dnd_motion(self, iconview, _context, x, y, _etime):
+        """Check if drag location is in space surrounding items. If so don't accept drop.
+        Also handles the drag-motion signal in order to auto-scroll the view"""
+
+        item = iconview.get_dest_item_at_pos(x, y)
+        if not item:
+            if self.is_between_items(iconview, x, y):
+                iconview.stop_emission('drag_motion')
 
         autoscroll_area = 40
         sw_vadj = self.sw.get_vadjustment()
