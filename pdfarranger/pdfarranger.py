@@ -28,6 +28,7 @@ import traceback
 import locale  # for multilanguage support
 import gettext
 from urllib.request import url2pathname
+import pikepdf
 
 sharedir = os.path.join(sys.prefix, 'share')
 basedir = '.'
@@ -202,7 +203,7 @@ def warn_dialog(func):
     return wrapper
 
 
-def get_file_path_from_dnd_dropped_uri(uri):
+def get_file_path_from_uri(uri):
     """Extracts the path from an uri"""
     uri = uri[5:]  # remove 'file:'
     path = url2pathname(uri)  # escape special chars
@@ -267,10 +268,11 @@ class PdfArranger(Gtk.Application):
         self.export_file = None
 
         # Clipboard for cut copy paste
-        if os.name == 'nt':
-            self.clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
-        else:
-            self.clipboard = Gtk.Clipboard.get(Gdk.Atom.intern('_SELECTION_PDFARRANGER', False))
+        self.clipboard_default = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+        if os.name == 'posix':
+            # "private" clipboard does not work in Windows so we can't use it here
+            self.clipboard_pdfarranger = Gtk.Clipboard.get(Gdk.Atom.intern('_SELECTION_PDFARRANGER',
+                                                                           False))
 
     def do_open(self, files, _n, _hints):
         """ https://lazka.github.io/pgi-docs/Gio-2.0/classes/Application.html#Gio.Application.do_open """
@@ -803,13 +805,16 @@ class PdfArranger(Gtk.Application):
 
     @staticmethod
     def data_to_pageadder(data, pageadder):
-        """Data to pageadder"""
-
+        """Data to pageadder."""
         tmp = data.pop(0).split('\n')
         filename = tmp[0]
-        npage, angle = [int(k) for k in tmp[1:3]]
-        crop = [float(side) for side in tmp[3:7]]
-        pageadder.addpages(filename, npage, angle, crop)
+        npage = int(tmp[1])
+        if len(tmp) < 3:  # Only when paste files interleaved
+            pageadder.addpages(filename, npage)
+        else:
+            angle = int(tmp[2])
+            crop = [float(side) for side in tmp[3:7]]
+            pageadder.addpages(filename, npage, angle, crop)
 
     def paste_pages(self, data, before, ref_to, select_added):
         """Paste pages to iconview"""
@@ -817,9 +822,9 @@ class PdfArranger(Gtk.Application):
         pageadder = PageAdder(self)
         if ref_to:
             pageadder.move(ref_to, before)
-
-        if not before:
+        if not before and ref_to:
             data.reverse()
+
         while data:
             try:  # Clipboard can contain not expected data
                 self.data_to_pageadder(data, pageadder)
@@ -827,9 +832,17 @@ class PdfArranger(Gtk.Application):
                 return False
         return pageadder.commit(select_added, add_to_undomanager=True)
 
-    def paste_pages_interleave(self, data, before, ref_to):
-        """Paste pages interleved to iconview"""
+    def paste_files(self, filepaths, before, ref_to):
+        """Paste files to iconview."""
+        pageadder = PageAdder(self)
 
+        for filepath in filepaths:
+            pageadder.move(ref_to, before)
+            pageadder.addpages(filepath)
+        pageadder.commit(select_added=False, add_to_undomanager=True)
+
+    def paste_pages_interleave(self, data, before, ref_to):
+        """Paste pages or files interleved to iconview."""
         pageadder = PageAdder(self)
         model = self.iconview.get_model()
         iter_to = None
@@ -864,22 +877,107 @@ class PdfArranger(Gtk.Application):
         self.clear_selected()
 
     def on_action_cut(self, _action, _param, _unknown):
-        """Cut selected pages to clipboard"""
-
+        """Cut selected pages to clipboard."""
         data = self.copy_pages()
-        self.clipboard.set_text(data, -1)
+        if os.name == 'posix':
+            self.clipboard_pdfarranger.set_text(data, -1)
+            self.clipboard_default.set_text('', -1)
+        if os.name == 'nt':
+            self.clipboard_default.set_text('pdfarranger-clipboard\n' + data, -1)
 
         self.clear_selected()
 
     def on_action_copy(self, _action, _param, _unknown):
-        """Copy selected pages to clipboard"""
-
+        """Copy selected pages to clipboard."""
         data = self.copy_pages()
-        self.clipboard.set_text(data, -1)
+        if os.name == 'posix':
+            self.clipboard_pdfarranger.set_text(data, -1)
+            self.clipboard_default.set_text('', -1)
+        if os.name == 'nt':
+            self.clipboard_default.set_text('pdfarranger-clipboard\n' + data, -1)
 
     def on_action_paste(self, _action, mode, _unknown):
-        """Paste pages from clipboard"""
+        """Paste pages or pdf files from clipboard."""
+        data, data_is_filepaths = self.read_from_clipboard()
+        if not data:
+            return
 
+        mode = mode.get_int32()
+        ref_to, before = self.set_paste_location(mode, data_is_filepaths)
+
+        # mode = 0 paste after
+        # mode = 1 paste before
+        # mode = 2 paste interleave odd
+        # mode = 3 paste interveave even
+        if mode == 0 or mode == 1:
+            if data_is_filepaths:
+                self.paste_files(data, before, ref_to)
+            else:
+                data = data.split('\n;\n')
+                self.paste_pages(data, before, ref_to, select_added=False)
+
+        elif mode == 2 or mode == 3:
+            if data_is_filepaths:
+                filepaths = []
+
+                # Generate data to send to paste_interleave
+                for filepath in data:
+                    try:
+                        pdf = pikepdf.Pdf.open(filepath)
+                    except pikepdf._qpdf.PdfError:
+                        message = 'PDF document is damaged: ' + filepath
+                        print(message, file=sys.stderr)
+                        self.error_message_dialog(message)
+                        continue
+                    for page in range(1, len(pdf.pages) + 1):
+                        filepaths.append('\n'.join([filepath, str(page)]))
+                data = filepaths
+            else:
+                data = data.split('\n;\n')
+            self.paste_pages_interleave(data, before, ref_to)
+
+    def read_from_clipboard(self):
+        """Read data from clipboards. Check if data is copied pages or files."""
+        filepaths = []
+        data = self.clipboard_default.wait_for_text()
+        if not data:
+            data = ''
+
+        # In Linux, if default clipboard holds path to files,
+        # these files will be pasted with precedence over copied pages.
+        if os.name == 'posix':
+            rows = data.split('\n')
+            for row in rows:
+                if row.startswith('file:///'):  # Dolphin, Nautilus, (Thunar startswith /)
+                    row = get_file_path_from_uri(row)
+                if os.path.isfile(row):
+                    filepaths.append(row)
+            if not filepaths:
+                data = self.clipboard_pdfarranger.wait_for_text()
+
+        # In Windows default clipboard is used for both copied pages and copied files.
+        # If id "pdfarranger-clipboard" is found pages is expected to be in clipboard, else files.
+        if os.name == 'nt':
+            if data.startswith('pdfarranger-clipboard\n'):
+                data = data.lstrip('pdfarranger-clipboard\n')
+            else:
+                rows = data.split('\n')
+                for row in rows:
+                    if row.startswith('"') and row.endswith('"'):
+                        row = row[1:-1]
+                    if os.path.isfile(row):
+                        filepaths.append(row)
+
+        if filepaths:
+            data = filepaths
+            data_is_filepaths = True
+        else:
+            data_is_filepaths = False
+
+        return data, data_is_filepaths
+
+    def set_paste_location(self, mode, data_is_filepaths):
+        """Sets reference where pages should be pasted and if before or after that."""
         model = self.iconview.get_model()
 
         selection = self.iconview.get_selected_items()
@@ -889,15 +987,22 @@ class PdfArranger(Gtk.Application):
         # mode = 1 paste before
         # mode = 2 paste interleave odd
         # mode = 3 paste interveave even
-        mode = mode.get_int32()
         if len(model) == 0:
             before = True
             ref_to = None
         elif mode == 0:
-            before = False
-            if len(selection) == 0:
+            last_row = model[-1]
+            if len(selection) == 0 or selection[-1] == last_row.path:
+                before = False
                 ref_to = None
+            elif data_is_filepaths:
+                before = True
+                path = selection[-1]
+                iter_next = model.iter_next(model.get_iter(path))
+                path_next = model.get_path(iter_next)
+                ref_to = Gtk.TreeRowReference.new(model, path_next)
             else:
+                before = False
                 ref_to = Gtk.TreeRowReference.new(model, selection[-1])
         else:
             if mode == 3:
@@ -908,14 +1013,7 @@ class PdfArranger(Gtk.Application):
                 ref_to = Gtk.TreeRowReference.new(model, Gtk.TreePath(0))
             else:
                 ref_to = Gtk.TreeRowReference.new(model, selection[0])
-
-        data = self.clipboard.wait_for_text()
-        if data:
-            data = data.split('\n;\n')
-            if mode == 0 or mode == 1:
-                self.paste_pages(data, before, ref_to, select_added=False)
-            elif mode == 2 or mode == 3:
-                self.paste_pages_interleave(data, before, ref_to)
+        return ref_to, before
 
     @staticmethod
     def iv_drag_begin(iconview, context):
@@ -992,8 +1090,6 @@ class PdfArranger(Gtk.Application):
             if not item and self.is_between_items(iconview, x, y):
                 context.finish(False, False, etime)
                 return
-            if not ref_to:
-                data.reverse()
             changed = self.paste_pages(data, before, ref_to, select_added=True)
             if changed and context.get_actions() & Gdk.DragAction.MOVE:
                 context.finish(True, True, etime)
@@ -1169,7 +1265,7 @@ class PdfArranger(Gtk.Application):
         if target_id == self.TEXT_URI_LIST:
             pageadder = PageAdder(self)
             for uri in selection_data.get_uris():
-                filename = get_file_path_from_dnd_dropped_uri(uri)
+                filename = get_file_path_from_uri(uri)
                 pageadder.addpages(filename)
             pageadder.commit(select_added=False, add_to_undomanager=True)
 
