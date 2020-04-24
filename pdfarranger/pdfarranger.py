@@ -816,6 +816,31 @@ class PdfArranger(Gtk.Application):
             crop = [float(side) for side in tmp[3:7]]
             pageadder.addpages(filename, npage, angle, crop)
 
+    def is_data_valid(self, data):
+        """Validate data to be pasted from clipboard. Only used in Windows."""
+        data_copy = data.copy()
+        data_valid = True
+        while data_copy:
+            try:
+                tmp = data_copy.pop(0).split('\n')
+                filename = tmp[0]
+                npage = int(tmp[1])
+                angle = int(tmp[2])
+                crop = [float(side) for side in tmp[3:7]]
+                if not (os.path.isfile(filename) and
+                        npage > 0 and angle in [0, 90, 180, 270] and
+                        all((cr >= 0.0 and cr <= 0.99) for cr in crop) and
+                        (crop[0] + crop[1] <= 0.99) and (crop[2] + crop[3] <= 0.99)):
+                    data_valid = False
+                    break
+            except (ValueError, FileNotFoundError, IndexError):
+                data_valid = False
+                break
+        if not data_valid:
+            message = 'Pasted data not valid'
+            self.error_message_dialog(message)
+        return data_valid
+
     def paste_pages(self, data, before, ref_to, select_added):
         """Paste pages to iconview"""
 
@@ -826,10 +851,7 @@ class PdfArranger(Gtk.Application):
             data.reverse()
 
         while data:
-            try:  # Clipboard can contain not expected data
-                self.data_to_pageadder(data, pageadder)
-            except (ValueError, FileNotFoundError):
-                return False
+            self.data_to_pageadder(data, pageadder)
         return pageadder.commit(select_added, add_to_undomanager=True)
 
     def paste_files(self, filepaths, before, ref_to):
@@ -851,10 +873,7 @@ class PdfArranger(Gtk.Application):
         self.set_unsaved(True)
 
         while data:
-            try:  # Clipboard can contain not expected data
-                self.data_to_pageadder(data, pageadder)
-            except (ValueError, FileNotFoundError):
-                return
+            self.data_to_pageadder(data, pageadder)
 
             pageadder.move(ref_to, before)
             pageadder.commit(select_added=False, add_to_undomanager=False)
@@ -909,12 +928,16 @@ class PdfArranger(Gtk.Application):
         # mode = 1 paste before
         # mode = 2 paste interleave odd
         # mode = 3 paste interveave even
+        data_valid = True
         if mode == 0 or mode == 1:
             if data_is_filepaths:
                 self.paste_files(data, before, ref_to)
             else:
                 data = data.split('\n;\n')
-                self.paste_pages(data, before, ref_to, select_added=False)
+                if os.name == 'nt':
+                    data_valid = self.is_data_valid(data)
+                if data_valid:
+                    self.paste_pages(data, before, ref_to, select_added=False)
 
         elif mode == 2 or mode == 3:
             if data_is_filepaths:
@@ -934,7 +957,10 @@ class PdfArranger(Gtk.Application):
                 data = filepaths
             else:
                 data = data.split('\n;\n')
-            self.paste_pages_interleave(data, before, ref_to)
+                if os.name == 'nt':
+                    data_valid = self.is_data_valid(data)
+            if data_valid:
+                self.paste_pages_interleave(data, before, ref_to)
 
     def read_from_clipboard(self):
         """Read data from clipboards. Check if data is copied pages or files."""
