@@ -275,6 +275,9 @@ class PdfArranger(Gtk.Application):
         self.pressed_button = None
         self.rendering_thread = None
         self.export_file = None
+        self.drag_path = None
+        self.drag_pos = None
+        self.cell_width = 0
 
         # Clipboard for cut copy paste
         self.clipboard_default = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
@@ -401,10 +404,8 @@ class PdfArranger(Gtk.Application):
 
         # Create a scrolled window to hold the thumbnails-container
         self.sw = self.uiXML.get_object('scrolledwindow')
-        self.sw.drag_dest_set(Gtk.DestDefaults.MOTION |
-                              Gtk.DestDefaults.HIGHLIGHT |
-                              Gtk.DestDefaults.DROP |
-                              Gtk.DestDefaults.MOTION,
+        self.sw.drag_dest_set(Gtk.DestDefaults.HIGHLIGHT |
+                              Gtk.DestDefaults.DROP,
                               self.TARGETS_SW,
                               Gdk.DragAction.COPY |
                               Gdk.DragAction.MOVE)
@@ -610,8 +611,8 @@ class PdfArranger(Gtk.Application):
             cellthmb_xpad, _cellthmb_ypad = self.cellthmb.get_padding()
             border_and_shadow = 7  # 2*th1+th2 set in iconview.py
             # cell width min limit 50 is set in gtkiconview.c
-            cell_width = max(item_width + 2 * cellthmb_xpad + border_and_shadow, 50)
-            padded_cell_width = cell_width + 2 * item_padding
+            self.cell_width = max(item_width + 2 * cellthmb_xpad + border_and_shadow, 50)
+            padded_cell_width = self.cell_width + 2 * item_padding
             min_col_spacing = 5
             min_margin = 11
             iw_width = window.get_size()[0]
@@ -1105,18 +1106,11 @@ class PdfArranger(Gtk.Application):
         if not data:
             return
         data = data.decode().split('\n;\n')
-        item = iconview.get_dest_item_at_pos(x, y)
-        if item:
-            path, position = item
-            ref_to = Gtk.TreeRowReference.new(model, path)
+        if self.drag_path and len(model) > 0:
+            ref_to = Gtk.TreeRowReference.new(model, self.drag_path)
         else:
             ref_to = None
-            position = Gtk.IconViewDropPosition.DROP_RIGHT
-            if len(model) > 0:  # find the iterator of the last row
-                row = model[-1]
-                ref_to = Gtk.TreeRowReference.new(model, row.path)
-        before = (position == Gtk.IconViewDropPosition.DROP_LEFT
-                  or position == Gtk.IconViewDropPosition.DROP_ABOVE)
+        before = self.drag_pos == Gtk.IconViewDropPosition.DROP_LEFT
         target = selection_data.get_target().name()
         if target == 'MODEL_ROW_INTERN':
             move = context.get_actions() & Gdk.DragAction.MOVE
@@ -1139,9 +1133,6 @@ class PdfArranger(Gtk.Application):
                     model.remove(model.get_iter(ref_from.get_path()))
 
         elif target == 'MODEL_ROW_EXTERN':
-            if not item and self.is_between_items(iconview, x, y):
-                context.finish(False, False, etime)
-                return
             changed = self.paste_pages(data, before, ref_to, select_added=True)
             if changed and context.get_actions() & Gdk.DragAction.MOVE:
                 context.finish(True, True, etime)
@@ -1186,8 +1177,8 @@ class PdfArranger(Gtk.Application):
                 return True
         return False
 
-    def iv_dnd_motion(self, iconview, _context, x, y, _etime):
-        """Handles auto-scroll when drag up/down. Also reject drop to location between items."""
+    def iv_dnd_motion(self, iconview, context, x, y, etime):
+        """Handles auto-scroll when drag up/down. Also handle drag feedback."""
         autoscroll_area = 40
         sw_vadj = self.sw.get_vadjustment()
         sw_height = self.sw.get_allocation().height
@@ -1205,9 +1196,40 @@ class PdfArranger(Gtk.Application):
             GObject.source_remove(self.iv_auto_scroll_timer)
             self.iv_auto_scroll_timer = None
 
+        # Show move or copy icon sign when drag
+        if context.get_actions() & Gdk.DragAction.MOVE:
+            Gdk.drag_status(context, Gdk.DragAction.MOVE, etime)
+        else:
+            Gdk.drag_status(context, Gdk.DragAction.COPY, etime)
+
+        # By default 5 drop positions are possible: into, left, right, above
+        # and below. We override that behaviour and only show drop left and right.
+        # When cursor is in drop zone True is returned
+        model = iconview.get_model()
+        if len(model) == 0:
+            return True
         item = iconview.get_dest_item_at_pos(x, y)
-        if not item and self.is_between_items(iconview, x, y):
-            iconview.stop_emission('drag_motion')
+        if item:
+            self.drag_path, _pos = item
+            #cell_width, _cell_height = self.cellthmb.get_fixed_size()
+            item_plus = iconview.get_dest_item_at_pos(x + self.cell_width / 2, y)
+            self.drag_pos = Gtk.IconViewDropPosition.DROP_RIGHT
+            if item_plus:
+                drag_path_plus, _pos = item_plus
+                if self.drag_path == drag_path_plus:
+                    self.drag_pos = Gtk.IconViewDropPosition.DROP_LEFT
+            iconview.set_drag_dest_item(self.drag_path, self.drag_pos)  # show drag/drop pos
+        elif not self.is_between_items(iconview, x, y):
+            self.drag_pos = Gtk.IconViewDropPosition.DROP_RIGHT
+            last_row = model[-1]
+            self.drag_path = last_row.path
+            iconview.set_drag_dest_item(self.drag_path, self.drag_pos)  # show drag/drop pos
+        else:
+            path, _pos = iconview.get_drag_dest_item()
+            if not path:  # no drag/drop pos visible
+                iconview.stop_emission('drag_motion')
+                return False
+        return True
 
     def iv_dnd_leave_end(self, _widget, _context, _ignored=None):
         """Ends the auto-scroll during DND"""
