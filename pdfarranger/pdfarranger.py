@@ -31,6 +31,10 @@ import gettext
 import gc
 from urllib.request import url2pathname
 
+# Add support for dnd to other instance and insert file at drop location in Windows
+if os.name == 'nt':
+    os.environ['GDK_WIN32_USE_EXPERIMENTAL_OLE2_DND'] = 'use this'
+
 try:
     import img2pdf
     img2pdf.Image.init()
@@ -1341,7 +1345,7 @@ class PdfArranger(Gtk.Application):
             model = self.iconview.get_model()
             ref_to = None
             before = False
-            if len(model) > 0 and os.name != 'nt':
+            if len(model) > 0:
                 before = True
                 last_row = model[-1]
                 if self.drag_pos == Gtk.IconViewDropPosition.DROP_LEFT:
