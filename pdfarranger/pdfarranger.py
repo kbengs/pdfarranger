@@ -239,6 +239,7 @@ class PdfArranger(Gtk.Application):
         self.window_width_old = 0
         self.set_iv_visible_id = None
         self.vadj_percent = None
+        self.mem_trim_running = False
 
         # Clipboard for cut copy paste
         self.clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
@@ -633,10 +634,9 @@ class PdfArranger(Gtk.Application):
         if alive:
             self.silent_render()
             return
-        self.visible_range = self.get_visible_range2()
+        visible_range = self.get_visible_range2()
         columns_nr = self.iconview.get_columns()
-        self.rendering_thread = PDFRenderer(self.model, self.pdfqueue,
-                                            self.visible_range , columns_nr)
+        self.rendering_thread = PDFRenderer(self.model, self.pdfqueue, visible_range, columns_nr)
         self.rendering_thread.connect('update_thumbnail', self.update_thumbnail)
         self.rendering_thread.start()
         ctxt_id = self.status_bar2.get_context_id("rendering")
@@ -737,20 +737,44 @@ class PdfArranger(Gtk.Application):
         self.uiXML.get_object('header_bar').set_title(title)
         return False
 
+    def mem_trim(self, visible):
+        """Trim memory by replacing distant thumbnails with low resolution previews."""
+        if self.mem_trim_running:
+            return
+        self.mem_trim_running = True
+        mem_limit = 80000000  # Pixels, 80000000 * 4byte/pixel / (1024 * 1024) = 305Mb
+        mem_usage = 0
+        for off in range(1, len(self.model)):
+            for num in visible[1] + off, visible[0] - off:
+                if not 0 <= num < len(self.model):
+                    continue
+                path = Gtk.TreePath.new_from_indices([num])
+                p = self.model[path][0]
+                if mem_usage > mem_limit:
+                    p.thumbnail = p.preview
+                    p.resample = p.resample_preview
+                elif p.thumbnail:
+                    mem_usage += p.thumbnail.get_width() * p.thumbnail.get_height()
+            while Gtk.events_pending():
+                Gtk.main_iteration()
+        malloc_trim()
+        self.mem_trim_running = False
+
     def update_thumbnail(self, _obj, ref, thumbnail, resample, scale, is_preview):
         """Update thumbnail emitted from rendering thread."""
+        visible = self.get_visible_range2(fraction=0)
         if ref is None:
             # Rendering ended
-            ctxt_id = self.status_bar2.get_context_id("rendering")
-            self.status_bar2.remove_all(ctxt_id)
-            malloc_trim()
+            if not self.rendering_thread.is_alive():
+                ctxt_id = self.status_bar2.get_context_id("rendering")
+                self.status_bar2.remove_all(ctxt_id)
+            self.mem_trim(visible)
             return
         path = ref.get_path()
         if path is None:
             # Page no longer exist
             return
-        if (self.visible_range[0] <= path.get_indices()[0] <= self.visible_range[1] and
-            resample != 1 / self.zoom_scale):
+        if visible[0] <= path.get_indices()[0] <= visible[1] and resample != 1 / self.zoom_scale:
             # Thumbnail is in the visible range but is not rendered for current zoom level
             self.silent_render()
             return
@@ -764,6 +788,7 @@ class PdfArranger(Gtk.Application):
         page.zoom = self.zoom_scale
         if is_preview:
             page.preview = thumbnail
+            page.resample_preview = resample
         # Let iconview refresh the thumbnail (only) by selecting it
         with GObject.signal_handler_block(self.iconview, self.id_selection_changed_event):
             if self.iconview.path_is_selected(path):

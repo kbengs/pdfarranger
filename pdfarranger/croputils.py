@@ -44,6 +44,7 @@ def scale(model, selection, factor):
         if page.scale != f:
             changed = True
         page.resample = page.resample * f / page.scale
+        page.resample_preview = page.resample_preview * f / page.scale
         page.scale = f
         model.set_value(it, 0, page)
     return changed
