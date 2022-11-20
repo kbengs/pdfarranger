@@ -65,7 +65,7 @@ class CellRendererImage(Gtk.CellRenderer):
         window.fill()
 
         # border
-        window.set_source_rgb(0, 0, 0)
+        window.set_source_rgb(*self.page.border_color)
         window.rectangle(0, 0, w2 + 2 * self.th1, h2 + 2 * self.th1)
         window.fill()
 

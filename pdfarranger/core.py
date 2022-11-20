@@ -330,6 +330,8 @@ class Page(BasePage):
         self.description = description
         """The text under the thumbnail"""
         self.layerpages = list(layerpages)
+        self.border_color = [0.0, 0.0, 0.0]
+        """Thumbnail border color"""
 
     def __repr__(self):
         return (f"Page({self.nfile}, {self.npage}, {self.zoom}, '{self.copyname}', "

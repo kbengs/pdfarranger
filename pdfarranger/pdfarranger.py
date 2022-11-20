@@ -464,6 +464,7 @@ class PdfArranger(Gtk.Application):
             ("split-booklet", self.split_booklet),
             ("preferences", self.on_action_preferences),
             ("print", self.on_action_print),
+            ("mark", self.on_action_mark_thumbnail, 'i'),
         ]
         self.window.add_action_entries(self.actions)
 
@@ -1087,7 +1088,12 @@ class PdfArranger(Gtk.Application):
         page.resample = 1 / zoom
         if is_preview:
             page.preview = thumbnail
-        # Let iconview refresh the thumbnail (only) by selecting it
+        self.refresh_iconview_thumbnail(path)
+        ac = self.iconview.get_accessible().ref_accessible_child(path.get_indices()[0])
+        ac.set_description(page.description)
+
+    def refresh_iconview_thumbnail(self, path):
+        # Refresh the thumbnail by toggling selection
         with GObject.signal_handler_block(self.iconview, self.id_selection_changed_event):
             if self.iconview.path_is_selected(path):
                 self.iconview.unselect_path(path)
@@ -1095,8 +1101,6 @@ class PdfArranger(Gtk.Application):
             else:
                 self.iconview.select_path(path)
                 self.iconview.unselect_path(path)
-        ac = self.iconview.get_accessible().ref_accessible_child(path.get_indices()[0])
-        ac.set_description(page.description)
 
     def get_visible_range2(self):
         """Get range of items visible in window.
@@ -1731,6 +1735,23 @@ class PdfArranger(Gtk.Application):
         self.clipboard.set_text('pdfarranger-clipboard\n' + data, -1)
         self.clear_selected()
         self.window.lookup_action("paste").set_enabled(True)
+
+    def on_action_mark_thumbnail(self, _action, option, _unknown):
+        """Set the thumbnail border color"""
+        if option == GLib.Variant('i', 0):
+            color = [0.0, 0.0, 0.0]  # Black
+        elif option == GLib.Variant('i', 1):
+            color = [1.0, 0.0, 0.0]  # Red
+        elif option == GLib.Variant('i', 2):
+            color = [0.0, 1.0, 0.0]  # Green
+        elif option == GLib.Variant('i', 3):
+            color = [0.0, 0.0, 1.0]  # Blue
+        elif option == GLib.Variant('i', 4):
+            color = [1.0, 1.0, 1.0]  # White
+        selection = self.iconview.get_selected_items()
+        for path in selection:
+            self.model[path][0].border_color = color
+            self.refresh_iconview_thumbnail(path)
 
     def on_action_copy(self, _action, _param, _unknown):
         """Copy selected pages to clipboard."""
@@ -2494,6 +2515,7 @@ class PdfArranger(Gtk.Application):
             ("crop-white-borders", ne),
             ("generate-booklet", ne),
             ("split-booklet", ne),
+            ("mark", ne),
         ]:
             self.window.lookup_action(a).set_enabled(e)
         self.update_statusbar()
@@ -2888,12 +2910,14 @@ class PdfArranger(Gtk.Application):
                 adder.move(ref, before=False)
                 adder.addpages(file)
                 adder.commit(select_added=True, add_to_undomanager=False)
+                color = self.model[path][0].border_color
                 data = self.deserialize([self.model[path][0].serialize()])
                 with self.render_lock():
                     self.model.remove(self.model.get_iter(path))
                 self.paste_as_layer(data, path, 'OVERLAY', (0.5, 0.5))
                 self.model[path][0].description = data[0][2]
                 self.model[path][1] = data[0][2]
+                self.model[path][0].border_color = color
 
     def crop_dialog(self, _action, _parameter, _unknown):
         """Opens a dialog box to define margins for page cropping."""

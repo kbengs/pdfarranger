@@ -63,6 +63,11 @@ _DEFAULT_ACCELS = [
     ('main-menu', 'F10'),
     ('metadata', '<Alt>Return'),
     ('context-menu', '<Shift>F10 Menu'),
+    ('mark(0)', 'k'),
+    ('mark(1)', 'r'),
+    ('mark(2)', 'g'),
+    ('mark(3)', 'b'),
+    ('mark(4)', 'w'),
 ]
 
 
