@@ -85,6 +85,35 @@ class CellRendererImage(Gtk.CellRenderer):
 
         window.set_source_surface(self.page.thumbnail)
         window.paint()
+        self.draw_layer_positioning_aid(window, w1, h1)
+
+    def draw_layer_positioning_aid(self, window, w1, h1):
+        if len(self.page.grid) == 0:
+            return
+        ncols, nrows, col, row, snapmode = self.page.grid
+        if snapmode == 'FREE':
+            return
+        wbox, hbox = (w1 - self.th1) / ncols, (h1 - self.th1) / nrows
+        window.translate(1, 1)
+        for ncol in range(ncols):
+            for nrow in range(nrows):
+                x = int(0.5 + wbox * ncol)
+                y = int(0.5 + hbox * nrow)
+                w = int(0.5 + wbox + wbox * ncol - x)
+                h = int(0.5 + hbox + hbox * nrow - y)
+                if ncol == col and nrow == row:
+                    window.set_source_rgba(170, 0, 0, 0.5)
+                    margin = 5
+                    if snapmode == 'CENTER':
+                        mx, my = margin, margin
+                    else:  # EDGES
+                        mx, my = col * margin, row * margin
+                    window.rectangle(x + mx, y + my, w -  margin * 2, h - margin * 2)
+                    window.fill()
+                    window.stroke()
+                window.set_source_rgb(170, 0, 0)
+                window.rectangle(x, y, w, h)
+                window.stroke()
 
     def do_get_size(self, _widget, cell_area=None):
         x = y = 0

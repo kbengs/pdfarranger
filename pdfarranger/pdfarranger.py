@@ -37,9 +37,10 @@ import gc
 import subprocess
 import pikepdf
 import hashlib
+import cairo
 from urllib.request import url2pathname
 from functools import lru_cache
-from math import log
+from math import log, pi
 
 multiprocessing.freeze_support()  # Does nothing in Linux
 
@@ -205,10 +206,13 @@ class PdfArranger(Gtk.Application):
     MODEL_ROW_EXTERN = 1002
     # Drag and drop ID for pages coming from a non-pdfarranger application
     TEXT_URI_LIST = 1003
+    # ID when the size of the dragged page is requested
+    LAYER_PAGE_SIZE = 1004
     TARGETS_IV = [Gtk.TargetEntry.new('MODEL_ROW_INTERN', Gtk.TargetFlags.SAME_WIDGET,
                                       MODEL_ROW_INTERN),
                   Gtk.TargetEntry.new('MODEL_ROW_EXTERN', Gtk.TargetFlags.OTHER_APP,
-                                      MODEL_ROW_EXTERN)]
+                                      MODEL_ROW_EXTERN),
+                  Gtk.TargetEntry.new('LAYER_PAGE_SIZE', 0, LAYER_PAGE_SIZE)]
     TARGETS_SW = [Gtk.TargetEntry.new('text/uri-list', 0, TEXT_URI_LIST),
                   Gtk.TargetEntry.new('MODEL_ROW_EXTERN', Gtk.TargetFlags.OTHER_APP,
                                       MODEL_ROW_EXTERN)]
@@ -270,6 +274,7 @@ class PdfArranger(Gtk.Application):
         multiprocessing.set_start_method('spawn')
         self.quit_flag = multiprocessing.Event()
         self.layer_pos = 50, 50
+        self.laypos = 'OVERLAY'
 
         # Clipboard for cut copy paste
         self.clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
@@ -1511,9 +1516,10 @@ class PdfArranger(Gtk.Application):
             self.update_max_zoom_level()
             self.silent_render()
         elif pastemode in ['OVERLAY', 'UNDERLAY'] and not data_is_filepaths:
-            self.paste_as_layer(data, laypos=pastemode)
+            selection = self.iconview.get_selected_items()
+            self.paste_as_layer(data, selection, laypos=pastemode)
 
-    def paste_as_layer(self, data, laypos):
+    def paste_as_layer(self, data, destination, laypos, offset_xy=None):
         page_stack = []
         pageadder = PageAdder(self)
         for filename, npage, _basename, angle, scale, crop, layerdata in data:
@@ -1521,19 +1527,19 @@ class PdfArranger(Gtk.Application):
             page_stack.append(pageadder.get_layerpages(d))
             if page_stack is None:
                 return
-        selection = self.iconview.get_selected_items()
-        if not self.is_paste_layer_available(selection):
+        if not self.is_paste_layer_available(destination):
             return
-        dpage = self.model[selection[-1]][0]
+        dpage = self.model[destination[-1]][0]
         lpage = page_stack[0][0]
-        offset_xy = pageutils.PastePageLayerDialog(self, dpage, lpage, laypos).get_offset()
+        if offset_xy is None:
+            offset_xy = pageutils.PastePageLayerDialog(self, dpage, lpage, laypos).get_offset()
         if offset_xy is None:
             return
         self.undomanager.commit("Add Layer")
         self.set_unsaved(True)
 
         off_x, off_y = offset_xy  # Fraction of the page size differance at left & top
-        for num, row in enumerate(reversed(selection)):
+        for num, row in enumerate(reversed(destination)):
             dpage = self.model[row][0]
             layerpage_stack = page_stack[num % len(page_stack)]
 
@@ -1754,20 +1760,56 @@ class PdfArranger(Gtk.Application):
                         self.iconview.select_path(row.path)
         self.iv_selection_changed_event()
 
-    @staticmethod
-    def iv_drag_begin(iconview, context):
+    def iv_drag_begin(self, iconview, context):
         """Sets custom drag icon."""
-        selected_count = len(iconview.get_selected_items())
-        stock_icon = "gtk-dnd-multiple" if selected_count > 1 else "gtk-dnd"
-        iconview.stop_emission('drag_begin')
-        Gtk.drag_set_icon_name(context, stock_icon, 16, 16)
+        selection = self.iconview.get_selected_items()
+        page = self.model[selection[-1]][0]
+        thmb = page.thumbnail
+        state = Gdk.Keymap.get_default().get_modifier_state()
+        if thmb is not None and state & Gdk.ModifierType.MOD4_MASK:  # Super key
+            w, h = page.width_in_pixel(), page.height_in_pixel()
+            surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, max(100, w), max(100, h))
+            ctx = cairo.Context(surface)
+            ctx.translate(max(0, (100 - w) / 2), max(0, (100 - h) / 2))
+            ctx.set_source_rgb(0, 0, 0)
+            ctx.set_dash([4.0, 4.0])
+            ctx.rectangle(0, 0, w, h)
+            ctx.stroke()
+            rotation = round(int(page.angle) % 360 / 90) * 90
+            if rotation > 0:
+                ctx.translate(w / 2, h / 2)
+                ctx.rotate(rotation * pi / 180)
+                w0, h0 = (w, h) if page.angle in [0, 180] else (h, w)
+                ctx.translate(-w0 / 2, -h0 / 2)
 
-    def iv_dnd_get_data(self, _iconview, _context,
+            ctx.set_font_size(14)
+            t = _("OVER") if self.laypos == 'OVERLAY' else _("UNDER")
+            extents = ctx.text_extents(t)
+            ctx.move_to(w / 2 - extents.width / 2, h / 2 - 10)
+            ctx.show_text(t)
+
+            ctx.set_source_surface(thmb)
+            ctx.paint_with_alpha(0.4)
+            surface.set_device_offset(int(0.5 - max(100, w) / 2), int(0.5 - max(100, h) / 2))
+            Gtk.drag_set_icon_surface(context, surface)
+        else:
+            selected_count = len(iconview.get_selected_items())
+            stock_icon = "gtk-dnd-multiple" if selected_count > 1 else "gtk-dnd"
+            Gtk.drag_set_icon_name(context, stock_icon, 16, 16)
+        iconview.stop_emission('drag_begin')
+
+    def iv_dnd_get_data(self, _iconview, context,
                         selection_data, _target_id, _etime):
         """Handles requests for data by drag and drop in iconview"""
-
         target = str(selection_data.get_target())
-        if target == 'MODEL_ROW_INTERN':
+        if target == 'LAYER_PAGE_SIZE':
+            selection = self.iconview.get_selected_items()
+            lpage = self.model[selection[-1]][0]
+            data = str(lpage.width_in_points()) + "\n" + str(lpage.height_in_points())
+        elif target == 'MODEL_ROW_EXTERN' or context.get_selected_action() & Gdk.DragAction.ASK:
+            self.target_is_intern = False
+            data = self.copy_pages(add_hash=False)
+        elif target == 'MODEL_ROW_INTERN':
             self.target_is_intern = True
             selection = self.iconview.get_selected_items()
             selection.sort(key=lambda x: x.get_indices()[0])
@@ -1776,9 +1818,6 @@ class PdfArranger(Gtk.Application):
                 data.append(str(path[0]))
             if data:
                 data = '\n;\n'.join(data)
-        elif target == 'MODEL_ROW_EXTERN':
-            self.target_is_intern = False
-            data = self.copy_pages(add_hash=False)
         else:
             return
         selection_data.set(selection_data.get_target(), 8, data.encode())
@@ -1792,12 +1831,22 @@ class PdfArranger(Gtk.Application):
         if not data:
             return
         data = data.decode().split('\n;\n')
+        target = selection_data.get_target().name()
+        if context.get_selected_action() & Gdk.DragAction.ASK:
+            if target == 'LAYER_PAGE_SIZE':
+                context.data = data
+            else:
+                data = self.deserialize(data)
+                i = self.drag_path.get_indices()[0]
+                r = range(i, min(i + len(data), len(self.model)))
+                destination = [self.model[num].path for num in reversed(r)]
+                self.paste_as_layer(data, destination, self.laypos, context.dnd_offset)
+            return
         if self.drag_path and len(model) > 0:
             ref_to = Gtk.TreeRowReference.new(model, self.drag_path)
         else:
             ref_to = None
         before = self.drag_pos == Gtk.IconViewDropPosition.DROP_LEFT
-        target = selection_data.get_target().name()
         if target == 'MODEL_ROW_INTERN':
             move = context.get_selected_action() & Gdk.DragAction.MOVE
             self.undomanager.commit("Move" if move else "Copy")
@@ -1848,6 +1897,78 @@ class PdfArranger(Gtk.Application):
         GObject.idle_add(self.render)
         malloc_trim()
 
+    def get_pointer_relative_path(self, path, x, y):
+        """Get where mouse pointer is relative to path. Return value 0..1"""
+        cell_image_renderer = self.iconview.get_cells()[0]
+        img_rect = self.iconview.get_cell_rect(path, cell_image_renderer)[1]
+        dpage = self.model[path][0]
+        wd = dpage.width_in_pixel()
+        hd = dpage.height_in_pixel()
+        image_paddx = (img_rect.width - wd) / 2
+        image_paddy = (img_rect.height - hd) / 2
+        page_border = 2  # th1 set in iconview.py
+        dpage_offsetx = img_rect.x + image_paddx - page_border
+        dpage_offsety = img_rect.y + image_paddy - page_border
+        xr = min(1, max(0, (x - dpage_offsetx) / wd))
+        yr = min(1, max(0, (y - dpage_offsety) / hd))
+        return xr, yr
+
+    def get_drag_offset(self, path, state, context):
+        """Get the dragged layer offset from page.
+
+        The offset is the fraction of space positioned at left and top of the dragged layer,
+        where space is the differance in width and height between the layer and the page.
+        """
+        x, y = self.iconview.get_pointer()
+        xr, yr = self.get_pointer_relative_path(path, x, y)
+        dpage = self.model[path][0]
+        wdpage = dpage.width_in_points()
+        hdpage = dpage.height_in_points()
+        if not hasattr(context, 'data'):
+            return
+        wlpage = float(context.data[0].split('\n')[0])
+        hlpage = float(context.data[0].split('\n')[1])
+
+        # Calculate grid
+        if state & Gdk.ModifierType.CONTROL_MASK:
+            snapmode = 'FREE'
+            ncols = nrows = 1
+        elif state & Gdk.ModifierType.MOD1_MASK:  # Alt
+            snapmode = 'CENTER'
+            ncols, nrows = max(1, int(wdpage / wlpage + 1e-4)), max(1, int(hdpage / hlpage + 1e-4))
+        else:
+            snapmode = 'EDGES'
+            ncols = nrows = 3
+        col = min(ncols, max(0, int(xr * ncols)))
+        row = min(nrows, max(0, int(yr * nrows)))
+
+        self.set_layer_positioning_grid(path, [ncols, nrows, col, row, snapmode])
+
+        # Calculate offset
+        off_x = off_y = 0.5
+        wdiff, hdiff = wdpage - wlpage, hdpage - hlpage
+        if snapmode == 'FREE':
+            if wdiff != 0:
+                off_x = min(1, max(0, (wdpage * xr - 0.5 * wlpage) / wdiff))
+            if hdiff != 0:
+                off_y = min(1, max(0, (hdpage * yr - 0.5 * hlpage) / hdiff))
+        elif snapmode == 'CENTER':
+            if wdiff != 0:
+                off_x = (col * wdpage / ncols + 0.5 * wdpage / ncols - wlpage / 2) / wdiff
+            if hdiff != 0:
+                off_y = (row * hdpage / nrows + 0.5 * hdpage / nrows - hlpage / 2) / hdiff
+        elif snapmode == 'EDGES':
+            off_x = col / 2
+            off_y = row / 2
+        return off_x, off_y
+
+    def set_layer_positioning_grid(self, path, content):
+        if path is None:
+            return
+        num = path.get_indices()[0]
+        if num < len(self.model):
+            self.model[path][0].grid = content
+
     def iv_dnd_motion(self, iconview, context, x, y, etime):
         """Handles drag motion: autoscroll, select move or copy, select drag cursor location."""
         # Block dnd when a modal dialog is open
@@ -1856,15 +1977,22 @@ class PdfArranger(Gtk.Application):
                 iconview.stop_emission('drag_motion')
                 return Gdk.EVENT_PROPAGATE
 
+        self.set_layer_positioning_grid(self.drag_path, [])
         x, y = iconview.convert_widget_to_bin_window_coords(x, y)
 
         # Auto-scroll when drag up/down
         self.iv_autoscroll(x, y, autoscroll_area=40)
 
-        # Select move or copy dragAction
+        # Select move, copy or drag as layer
+        state = Gdk.Keymap.get_default().get_modifier_state()
+        target = Gdk.Atom.intern('LAYER_PAGE_SIZE', True)
+        drag_as_layer = target in context.list_targets() and state & Gdk.ModifierType.MOD4_MASK
         drag_move_posix = os.name == 'posix' and context.get_actions() & Gdk.DragAction.MOVE
         drag_move_nt = os.name == 'nt' and not keyboard.is_pressed('control')
-        if drag_move_posix or drag_move_nt:
+        if drag_as_layer:
+            Gdk.drag_status(context, Gdk.DragAction.ASK, etime)
+            iconview.drag_get_data(context, target, etime)
+        elif drag_move_posix or drag_move_nt:
             Gdk.drag_status(context, Gdk.DragAction.MOVE, etime)
         else:
             Gdk.drag_status(context, Gdk.DragAction.COPY, etime)
@@ -1893,7 +2021,15 @@ class PdfArranger(Gtk.Application):
             path = iconview.get_path_at_pos(x_s, y_s)
             if path:
                 break
-        if search_pos in ['XY', 'Right', 'Left', 'Below', 'Above']:
+        if drag_as_layer:
+            if search_pos == 'XY':
+                self.drag_path = path
+                self.drag_pos = Gtk.IconViewDropPosition.DROP_INTO
+                context.dnd_offset = self.get_drag_offset(path, state, context)
+            else:
+                iconview.stop_emission('drag_motion')
+                return Gdk.EVENT_PROPAGATE
+        elif search_pos in ['XY', 'Right', 'Left', 'Below', 'Above']:
             self.drag_path = path
             if path == iconview.get_path_at_pos(x_s + cell_width * 0.6, y_s):
                 self.drag_pos = Gtk.IconViewDropPosition.DROP_LEFT
@@ -1925,6 +2061,7 @@ class PdfArranger(Gtk.Application):
 
     def iv_dnd_leave_end(self, _widget, _context, _ignored=None):
         """Ends the auto-scroll during DND"""
+        self.set_layer_positioning_grid(self.drag_path, [])
 
         if self.iv_auto_scroll_timer:
             GObject.source_remove(self.iv_auto_scroll_timer)
@@ -2083,6 +2220,10 @@ class PdfArranger(Gtk.Application):
 
     def iv_key_press_event(self, iconview, event):
         """Manages keyboard press events on the iconview."""
+        if event.keyval == Gdk.KEY_o:
+            self.laypos = 'OVERLAY'
+        elif event.keyval == Gdk.KEY_u:
+            self.laypos = 'UNDERLAY'
         if event.state & Gdk.ModifierType.BUTTON1_MASK:
             return Gdk.EVENT_STOP
         if event.keyval in [Gdk.KEY_Up, Gdk.KEY_Down, Gdk.KEY_Left, Gdk.KEY_Right,

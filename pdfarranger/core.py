@@ -83,6 +83,8 @@ class Page:
         #: The name of the original file
         self.basename = basename
         self.layerpages = list(layerpages)
+        #: A layer positioning aid: [ncols, nrows, col, row, snapmode]
+        self.grid = []
 
     def description(self):
         shortname = os.path.splitext(self.basename)[0]
@@ -144,6 +146,7 @@ class Page:
 
     def duplicate(self, incl_thumbnail=True):
         r = copy.copy(self)
+        r.grid = []
         r.crop = list(r.crop)
         r.size = list(r.size)
         r.layerpages = [lp.duplicate(incl_thumbnail) for lp in r.layerpages]
