@@ -578,6 +578,7 @@ class PdfArranger(Gtk.Application):
         self.iconview = Gtk.IconView(self.model)
         self.iconview.clear()
         self.iconview.set_item_width(-1)
+        self.iconview.set_direction(Gtk.TextDirection.LTR)
 
         self.cellthmb = CellRendererImage()
         self.cellthmb.set_padding(3, 3)
