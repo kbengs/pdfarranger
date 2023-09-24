@@ -162,6 +162,12 @@ class Config(object):
     def set_show_save_warnings(self, enabled):
         self.data.set('preferences', 'show-save-warnings', str(enabled))
 
+    def monitor_file_changes(self):
+        return self.data.getboolean('preferences', 'monitor-file-changes', fallback=False)
+
+    def set_monitor_file_changes(self, enabled):
+        self.data.set('preferences', 'monitor-file-changes', str(enabled))
+
     def language(self):
         return self.data.get('preferences', 'language', fallback="")
 
@@ -237,6 +243,10 @@ class Config(object):
         hbox2.pack_start(label2, False, False, 8)
         frame2.add(hbox2)
         d.vbox.pack_start(frame2, False, False, 8)
+        t = _("Reload document on file change")
+        cb = Gtk.CheckButton(label=t, margin=12)
+        cb.set_active(self.monitor_file_changes())
+        d.vbox.pack_start(cb, False, False, 8)
         t = _("For more options see:")
         frame3 = Gtk.Frame(label=t, shadow_type=Gtk.ShadowType.NONE, margin=8)
         label3 = Gtk.Label(self._config_file(self.domain), selectable=True, margin=8)
@@ -275,4 +285,5 @@ class Config(object):
             num2 = combo2.get_active()
             theme = themes[num2] if num2 != 0 else ""
             self.set_theme(theme)
+            self.set_monitor_file_changes(cb.get_active())
         d.destroy()

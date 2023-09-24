@@ -38,6 +38,7 @@ import gi
 from gi.repository import GObject
 from gi.repository import GLib
 from gi.repository import Gtk
+from gi.repository import Gio
 
 gi.require_version("Poppler", "0.18")
 from gi.repository import Poppler  # for the rendering of pdf pages
@@ -518,7 +519,7 @@ class PDFDoc:
                 if not askpass:
                     raise e
 
-    def __init__(self, filename, basename, blank_size, stat, tmp_dir, parent):
+    def __init__(self, filename, basename, blank_size, stat, tmp_dir, parent, file_changed_cb):
         self.render_lock = threading.Lock()
         self.filename = os.path.abspath(filename)
         self.stat = stat
@@ -527,6 +528,10 @@ class PDFDoc:
         else:  # When copy-pasting
             self.basename = basename
         self.blank_size = blank_size  # != None if page is blank
+        gfile = Gio.file_new_for_path(filename)
+        self.monitor = gfile.monitor_file(Gio.FileMonitorFlags.NONE, None)
+        if self.monitor:
+           self.monitor.connect("changed", file_changed_cb)
         self.password = ""
         filemime = mimetypes.guess_type(self.filename)[0]
         if not filemime:
@@ -627,7 +632,7 @@ class PageAdder:
 
         try:
             pdfdoc = PDFDoc(filename, basename, blank_size, self.stat_cache[filename],
-                            self.app.tmp_dir, self.app.window)
+                            self.app.tmp_dir, self.app.window, self.app.file_changed_cb)
             self.app.pdfqueue.append(pdfdoc)
             return pdfdoc, len(self.app.pdfqueue), True
         except _UnknownPasswordException:

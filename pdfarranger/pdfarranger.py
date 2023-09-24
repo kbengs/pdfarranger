@@ -117,7 +117,7 @@ from gi.repository import GLib
 from gi.repository import Pango
 
 from .config import Config
-from .core import Sides
+from .core import Dims, Sides
 
 
 def _set_language_locale():
@@ -1351,6 +1351,55 @@ class PdfArranger(Gtk.Application):
                 adder.addpages(filename)
             adder.commit(select_added=False, add_to_undomanager=True)
         chooser.destroy()
+
+    def file_changed_cb(self, _monitor, file, other_file, event):
+        """Document has changed on disk.
+
+        Pages are swapped page number by page number for pages currently in model.
+        Any new pages are not added, any removed pages are not removed in model.
+        File changes during saving goes unnoticed.
+        """
+        if ((not self.config.monitor_file_changes()) or
+            (self.export_process and self.export_process.is_alive()) or
+            (event != Gio.FileMonitorEvent.CHANGES_DONE_HINT)):
+            return
+        pageadder = PageAdder(self)
+        doc_data = pageadder.get_pdfdoc(file.get_path())
+        if doc_data is None:
+            return
+        pdfdoc, nfile, was_added = doc_data
+        if not was_added:
+            return
+        # Is the changed file in model?
+        path = file.get_path()
+        for row in self.model:
+            if path == self.pdfqueue[row[0].nfile - 1].filename:
+                break
+        else:
+            return
+
+        m1 = _('"{}" has changed on disk. Do you want to reload its pages?')
+        m2 = _("(Only pages currently in project will be reloaded)")
+        confirm = self.confirm_dialog(m1.format(path) + " " + m2, action=_('_OK'))
+        if not confirm:
+            return
+
+        npages_new = pdfdoc.document.get_n_pages()
+        for row in self.model:
+            page = row[0]
+            pathm = self.pdfqueue[page.nfile - 1].filename
+            npages_old = self.pdfqueue[page.nfile - 1].document.get_n_pages()
+            if pathm != path or page.npage > npages_new:
+                continue
+            page.nfile = nfile
+            doc_page = pdfdoc.document.get_page(page.npage - 1)
+            page.size_orig = Dims(*doc_page.get_size())
+            page.size = page.size_orig if page.angle in [0, 180] else page.size_orig.flipped()
+            page.resample = -1
+
+        self.set_unsaved(True)
+        self.update_iconview_geometry()
+        self.render()
 
     def clear_selected(self, add_to_undomanager=True):
         """Removes the selected elements in the IconView"""
