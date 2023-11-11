@@ -410,6 +410,7 @@ class PdfArranger(Gtk.Application):
             ('cut', self.on_action_cut),
             ('copy', self.on_action_copy),
             ('explode-images', self.on_action_explode_into_images),
+            ('copy-special', self.on_action_copy_special, 'i'),
             ('paste', self.on_action_paste, 'i'),
             ('select', self.on_action_select, 'i'),
             ('select-same-file', self.on_action_select, 'i'),
@@ -1486,6 +1487,16 @@ class PdfArranger(Gtk.Application):
         self.clipboard.set_text('pdfarranger-clipboard\n' + data, -1)
         self.window.lookup_action("paste").set_enabled(True)
 
+    def get_nimages_in_page(self, page):
+        """Return number of images in page, including in overlays/underlays."""
+        nimages = 0
+        page_list = [page] + [lp for lp in page.layerpages]
+        for p in page_list:
+            poppler_page = self.pdfqueue[p.nfile - 1].get_page(p.npage - 1)
+            imaps = poppler_page.get_image_mapping()
+            nimages += len(imaps)
+        return nimages
+
     def get_images_in_page(self, page):
         """Return list of all images in page, including in overlays/underlays."""
         images = []
@@ -1498,6 +1509,40 @@ class PdfArranger(Gtk.Application):
                 if image is not None:
                     images.append(image)
         return images
+
+    def get_text_in_page(self, page):
+        """Return all text in page, including in overlays/underlays."""
+        text = ""
+        page_list = [page] + [lp for lp in page.layerpages]
+        for p in page_list:
+            poppler_page = self.pdfqueue[p.nfile - 1].get_page(p.npage - 1)
+            text += poppler_page.get_text() + "\n"
+        return text[:-1]
+
+    def on_action_copy_special(self, _action, option, _unknown):
+        """Copy image or text in selected page to clipboard."""
+        s = self.iconview.get_selected_items()
+        page = self.model[s[-1]][0]
+        if option.get_int32() == 0:  # Image
+            nimages = self.get_nimages_in_page(page)
+            if nimages == 0:
+                return
+            if nimages > 1:
+                d = Gtk.MessageDialog(
+                    parent=self.window,
+                    text=_('The page has several images. Use "Explode into Images" first."'),
+                    buttons=Gtk.ButtonsType.OK
+                    )
+                d.run()
+                d.destroy()
+                return
+            im = self.get_images_in_page(page)[0]
+            pixbuf = Gdk.pixbuf_get_from_surface(im, 0, 0, im.get_width(), im.get_height())
+            if pixbuf is not None:
+                self.clipboard.set_image(pixbuf)
+        elif option.get_int32() == 1:  # Text
+            text = self.get_text_in_page(page)
+            self.clipboard.set_text(text, -1)
 
     @staticmethod
     def process_pending_events():
@@ -2187,6 +2232,7 @@ class PdfArranger(Gtk.Application):
             ("export-selection", ne),
             ("cut", ne),
             ("copy", ne),
+            ("copy-special", len(selection) == 1),
             ("explode-images", ne and len(img2pdf_supported_img) > 0),
             ("split", ne),
             ("merge", ne),
