@@ -32,6 +32,7 @@ import pathlib
 import shutil
 import tempfile
 import threading
+import packaging.version as version
 from typing import NamedTuple, Optional, Tuple, Union
 import gettext
 import gi
@@ -475,12 +476,14 @@ def _img_to_pdf(filename, tmp_dir):
     fd, pdf_file_name = tempfile.mkstemp(suffix=".pdf", dir=tmp_dir)
     os.close(fd)
     with open(pdf_file_name, "wb") as f:
+        oldv = version.parse(img2pdf.__version__) < version.Version('0.4.2')
         img = img2pdf.Image.open(filename)
-        if (img.mode == "LA") or (img.mode != "RGBA" and "transparency" in img.info):
+        if oldv and ((img.mode == "LA") or (img.mode != "RGBA" and "transparency" in img.info)):
             # TODO: Find a way to keep image in P or L format and remove transparency.
             # This will work but converting from 1, L, P to RGB is not optimal.
             img = img.convert("RGBA")
-        if img.mode == "RGBA":
+        if oldv and img.mode == "RGBA":
+            # Remove transparency as old img2pdf doesn't support it
             bg = img2pdf.Image.new("RGB", img.size, (255, 255, 255))
             bg.paste(img, mask=img.split()[-1])
             imgio = img2pdf.BytesIO()
