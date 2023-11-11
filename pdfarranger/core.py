@@ -558,7 +558,7 @@ class PDFDoc:
                 raise PDFDocError(_("Image format is not supported by img2pdf"))
             if filename.startswith(tmp_dir) and filename.endswith(".png"):
                 os.remove(filename)
-                self.basename = _("Clipboard image")
+                self.basename = _("Image")
         else:
             raise PDFDocError(_("File is neither pdf nor image"))
 

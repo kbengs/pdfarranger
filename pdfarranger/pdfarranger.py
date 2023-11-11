@@ -409,6 +409,7 @@ class PdfArranger(Gtk.Application):
             ('metadata', self.edit_metadata),
             ('cut', self.on_action_cut),
             ('copy', self.on_action_copy),
+            ('explode-images', self.on_action_explode_into_images),
             ('paste', self.on_action_paste, 'i'),
             ('select', self.on_action_select, 'i'),
             ('select-same-file', self.on_action_select, 'i'),
@@ -1485,6 +1486,48 @@ class PdfArranger(Gtk.Application):
         self.clipboard.set_text('pdfarranger-clipboard\n' + data, -1)
         self.window.lookup_action("paste").set_enabled(True)
 
+    def get_images_in_page(self, page):
+        """Return list of all images in page, including in overlays/underlays."""
+        images = []
+        page_list = [page] + [lp for lp in page.layerpages]
+        for p in page_list:
+            poppler_page = self.pdfqueue[p.nfile - 1].get_page(p.npage - 1)
+            imaps = poppler_page.get_image_mapping()
+            for imap in imaps:
+                image = poppler_page.get_image(imap.image_id)
+                if image is not None:
+                    images.append(image)
+        return images
+
+    @staticmethod
+    def process_pending_events():
+        while Gtk.events_pending():
+            Gtk.main_iteration()
+
+    def on_action_explode_into_images(self, _action, _param, _unknown):
+        """Add all images in selected pages as new pages."""
+        self.set_export_state(True, _("Exploding into images…"))
+        self.process_pending_events()
+        s = self.iconview.get_selected_items()
+        filenames = []
+        for row in reversed(s):
+            page = self.model[row][0]
+            images = self.get_images_in_page(page)
+            for im in images:
+                pixbuf = Gdk.pixbuf_get_from_surface(im, 0, 0, im.get_width(), im.get_height())
+                fd, filename = tempfile.mkstemp(suffix=".png", dir=self.tmp_dir)
+                os.close(fd)
+                pixbuf.savev(filename, "png", [], [])
+                filenames.append(filename)
+        ref_to, before = self.set_paste_location(pastemode='AFTER', data_is_filepaths=True)
+        try:
+            self.paste_files(filenames, before, ref_to)
+        except OSError as e:
+            # Can lead to "Too many open files"
+            print(traceback.format_exc())
+            self.error_message_dialog(e)
+        self.set_export_state(False)
+
     def on_action_paste(self, _action, mode, _unknown):
         """Paste pages, file paths or an image from clipboard."""
         data, data_is_filepaths = self.read_from_clipboard()
@@ -2144,6 +2187,7 @@ class PdfArranger(Gtk.Application):
             ("export-selection", ne),
             ("cut", ne),
             ("copy", ne),
+            ("explode-images", ne and len(img2pdf_supported_img) > 0),
             ("split", ne),
             ("merge", ne),
             ("select-same-file", ne),
