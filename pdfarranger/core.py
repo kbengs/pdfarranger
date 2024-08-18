@@ -255,10 +255,11 @@ class Dims(NamedTuple):
         return Dims(self.width * (1 - crop.left - crop.right), self.height * (1 - crop.top - crop.bottom))
 
 
-class BasePage:
+class BasePage(GObject.Object):
     """Common base class for Page and LayerPage"""
-
+    angle = GObject.Property(type=int)
     def __init__(self, nfile, npage, copyname, angle, scale, crop: Sides, size_orig: Dims):
+        super().__init__()
         self.nfile = nfile
         """The ID (from 1 to n) of the PDF file owning the page"""
         self.npage = npage
@@ -273,6 +274,7 @@ class BasePage:
         """Width and height of the original page"""
         self.size = size_orig if angle in [0, 180] else size_orig.flipped()
         """Width and height"""
+        self.delete_flag = False
 
     def width_in_points(self) -> Numeric:
         """Return the page width in PDF points."""
@@ -302,12 +304,13 @@ class BasePage:
 
 
 class Page(BasePage):
-    def __init__(self, nfile, npage, zoom, copyname, angle, scale, crop: Sides, hide: Sides, size_orig: Dims, basename, layerpages):
+    thumbnail = GObject.Property()
+    def __init__(self, nfile, npage, zoom, copyname, angle, scale, crop: Sides, hide: Sides, size_orig: Dims, basename, layerpages, thumbnail=None):
         super().__init__(nfile, npage, copyname, angle, scale, Sides(*crop), size_orig)
         self.zoom = zoom
         self.hide = Sides(*hide)
         """Left, right, top, bottom hide"""
-        self.thumbnail = None
+        self.thumbnail = thumbnail
         self.resample = -1
         self.preview = None
         """A low resolution thumbnail"""
@@ -350,6 +353,7 @@ class Page(BasePage):
         return "\n".join([str(v) for v in ts])
 
     def duplicate(self, incl_thumbnail=True):
+        return self
         r = copy.copy(self)
         r.layerpages = [lp.duplicate() for lp in r.layerpages]
         if incl_thumbnail == False:
@@ -599,15 +603,15 @@ class PageAdder:
         #: Where to insert pages relatively to treerowref
         self.before = False
         #: Where to insert pages. If None pages are inserted at the end
-        self.treerowref = None
+        self.num = None
         self.stat_cache = {}
         self.content = []
         self.pdfqueue_used = True
 
-    def move(self, treerowref, before):
+    def move(self, num, before):
         """Insert pages at the given location."""
         self.before = before
-        self.treerowref = treerowref
+        self.num = num
 
     def get_pdfdoc(self, filename: str, basename: Optional[str] = None, blank_size=None) -> Optional[Tuple[PDFDoc, int, bool]]:
         """Get the pdfdoc object for the filename.
@@ -715,29 +719,23 @@ class PageAdder:
             if self.pdfqueue_used or len(self.content) > 1 or self.content[0] != 'pdf':
                 self.app.set_unsaved(True)
             self.content = []
-        if not self.before and self.treerowref:
-            self.pages.reverse()
         with self.app.render_lock():
-            for p in self.pages:
-                m = [p, p.description()]
-                if self.treerowref:
-                    iter_to = self.app.model.get_iter(self.treerowref.get_path())
-                    if self.before:
-                        it = self.app.model.insert_before(iter_to, m)
-                    else:
-                        it = self.app.model.insert_after(iter_to, m)
-                else:
-                    it = self.app.model.append(m)
-                if select_added:
-                    path = self.app.model.get_path(it)
-                    self.app.iconview.select_path(path)
+            if self.num is None:
+                self.num = 0
+            num = self.num if self.before else self.num + 1
+            num = min(num, len(self.app.model))
+            self.app.model.splice(position=num, n_removals=0, additions=self.pages)
+            #if select_added:
+            #    path = self.app.model.get_path(it)
+            #    self.app.gridview.select_path(path)
+
         if add_to_undomanager:
-            self.app.update_iconview_geometry()
+            self.app.gridview.update_geometry()
             GObject.idle_add(self.app.retitle)
             self.app.update_max_zoom_level()
             self.app.silent_render()
             self.app.update_statusbar()
-            self.scroll()
+            #self.scroll()
         self.pages = []
         return True
 
@@ -754,7 +752,7 @@ class PageAdder:
             scroll_path = Gtk.TreePath.new_from_indices([max(iref - len(self.pages), 0)])
         else:
             scroll_path = Gtk.TreePath.new_from_indices([max(iref + 1, 0)])
-        self.app.iconview.scroll_to_path(scroll_path, False, 0, 0)
+        self.app.gridview.scroll_to_path(scroll_path, False, 0, 0)
 
 
 class PDFRenderer(threading.Thread, GObject.GObject):
@@ -783,11 +781,9 @@ class PDFRenderer(threading.Thread, GObject.GObject):
             with self.model_lock:
                 if not 0 <= num < len(self.model):
                     break
-                path = Gtk.TreePath.new_from_indices([num])
-                ref = Gtk.TreeRowReference.new(self.model, path)
-                p = self.model[path][0].duplicate()
+                p = self.model[num].duplicate()
             if p.resample != 1 / p.zoom:
-                self.update(p, ref, p.zoom, False)
+                self.update(p, num, p.zoom, False)
         mem_limit = False
         for off in range(1, len(self.model)):
             for num in self.visible_end + off, self.visible_start - off:
@@ -796,9 +792,7 @@ class PDFRenderer(threading.Thread, GObject.GObject):
                 with self.model_lock:
                     if not 0 <= num < len(self.model):
                         continue
-                    path = Gtk.TreePath.new_from_indices([num])
-                    ref = Gtk.TreeRowReference.new(self.model, path)
-                    p = self.model[path][0].duplicate()
+                    p = self.model[num].duplicate()
                 if off <= self.columns_nr * 5:
                     # Thumbnail
                     zoom = p.zoom
@@ -812,7 +806,7 @@ class PDFRenderer(threading.Thread, GObject.GObject):
                     # -> don't update thumbnail, just take memory usage into account
                     zoom = 1 / p.resample
                 if p.resample != 1 / zoom:
-                    size = self.update(p, ref, zoom, is_preview)
+                    size = self.update(p, num, zoom, is_preview)
                 else:
                     size = p.thumbnail.get_width(), p.thumbnail.get_height()
                 mem_limit = self.mem_at_limit(size)
@@ -834,7 +828,7 @@ class PDFRenderer(threading.Thread, GObject.GObject):
         with pdfdoc.render_lock:
             page.render(cr)
 
-    def update(self, p: Page, ref, zoom, is_preview):
+    def update(self, p: Page, num, zoom, is_preview):
         """Render and emit updated thumbnails."""
         if (is_preview and p.preview) and (p.resample != -1):
             # Reuse the preview if it exist, unless it is marked for re-render
@@ -882,7 +876,7 @@ class PDFRenderer(threading.Thread, GObject.GObject):
         GObject.idle_add(
             self.emit,
             "update_thumbnail",
-            ref,
+            num,
             thumbnail,
             zoom,
             p.scale,

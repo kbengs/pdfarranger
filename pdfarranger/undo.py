@@ -51,14 +51,14 @@ class Manager(object):
         :param label: label of the action
         """
         self.states = self.states[:self.current]
-        self.states.append(([row[0].duplicate(False) for row in self.model], self.label,))
+        self.states.append(([page.duplicate(False) for page in self.model], self.label,))
         self.current += 1
         self.label = label
         self.__refresh()
 
     def undo(self, _action, _param, _unused):
         if self.current == len(self.states):
-            self.states.append(([row[0].duplicate(False) for row in self.model], self.label,))
+            self.states.append(([page.duplicate(False) for page in self.model], self.label,))
         state, self.label = self.states[self.current - 1]
         self.__set_state(state)
         self.current -= 1

@@ -23,12 +23,11 @@ along with PDF Arranger.  If not, see <http://www.gnu.org/licenses/>.
     <child type="titlebar">
       <object class="GtkHeaderBar" id="header_bar">
         <property name="visible">True</property>
-        <property name="spacing">4</property>
-        <property name="show_close_button">True</property>
         <child>
           <object class="GtkBox">
             <property name="visible">True</property>
             <property name="homogeneous">True</property>
+            <property name="valign">GTK_ALIGN_CENTER</property>
             <child>
               <object class="GtkButton">
                 <property name="visible">True</property>
@@ -44,11 +43,11 @@ along with PDF Arranger.  If not, see <http://www.gnu.org/licenses/>.
                   </object>
                 </child>
               </object>
-              <packing>
+              <!--packing>
                 <property name="expand">False</property>
                 <property name="fill">True</property>
                 <property name="position">0</property>
-              </packing>
+              </packing-->
             </child>
             <child>
               <object class="GtkButton">
@@ -65,11 +64,11 @@ along with PDF Arranger.  If not, see <http://www.gnu.org/licenses/>.
                   </object>
                 </child>
               </object>
-              <packing>
+              <!--packing>
                 <property name="expand">False</property>
                 <property name="fill">True</property>
                 <property name="position">1</property>
-              </packing>
+              </packing-->
             </child>
             <child>
               <object class="GtkButton">
@@ -84,11 +83,11 @@ along with PDF Arranger.  If not, see <http://www.gnu.org/licenses/>.
                   </object>
                 </child>
               </object>
-              <packing>
+              <!--packing>
                 <property name="expand">False</property>
                 <property name="fill">True</property>
                 <property name="position">2</property>
-              </packing>
+              </packing-->
             </child>
             <child>
               <object class="GtkButton" id="save_as_bar_button">
@@ -103,11 +102,11 @@ along with PDF Arranger.  If not, see <http://www.gnu.org/licenses/>.
                   </object>
                 </child>
               </object>
-              <packing>
+              <!--packing>
                 <property name="expand">False</property>
                 <property name="fill">True</property>
                 <property name="position">3</property>
-              </packing>
+              </packing-->
             </child>
             <style>
               <class name="linked"/>
@@ -118,7 +117,6 @@ along with PDF Arranger.  If not, see <http://www.gnu.org/licenses/>.
           <object class="GtkMenuButton" id="main_menu_button">
             <property name="visible">True</property>
             <property name="receives_default">False</property>
-            <property name="use_popover">False</property>
             <property name="tooltip_text" translatable="yes">Main Menu</property>
             <child>
               <object class="GtkImage">
@@ -127,15 +125,16 @@ along with PDF Arranger.  If not, see <http://www.gnu.org/licenses/>.
               </object>
             </child>
           </object>
-          <packing>
+          <!--packing>
             <property name="pack_type">end</property>
             <property name="position">1</property>
-          </packing>
+          </packing-->
         </child>
         <child>
           <object class="GtkBox">
             <property name="visible">True</property>
             <property name="homogeneous">True</property>
+            <property name="valign">GTK_ALIGN_CENTER</property>
             <child>
               <object class="GtkButton">
                 <property name="visible">True</property>
@@ -153,11 +152,11 @@ along with PDF Arranger.  If not, see <http://www.gnu.org/licenses/>.
                   <class name="image-button"/>
                 </style>
               </object>
-              <packing>
+              <!--packing>
                 <property name="expand">False</property>
                 <property name="fill">True</property>
                 <property name="position">0</property>
-              </packing>
+              </packing-->
             </child>
             <child>
               <object class="GtkButton">
@@ -176,25 +175,26 @@ along with PDF Arranger.  If not, see <http://www.gnu.org/licenses/>.
                   <class name="image-button"/>
                 </style>
               </object>
-              <packing>
+              <!--packing>
                 <property name="expand">False</property>
                 <property name="fill">True</property>
                 <property name="position">1</property>
-              </packing>
+              </packing-->
             </child>
             <style>
               <class name="linked"/>
             </style>
           </object>
-          <packing>
+          <!--packing>
             <property name="pack_type">end</property>
             <property name="position">2</property>
-          </packing>
+          </packing-->
         </child>
         <child>
           <object class="GtkBox">
             <property name="visible">True</property>
             <property name="homogeneous">True</property>
+            <property name="valign">GTK_ALIGN_CENTER</property>
             <child>
               <object class="GtkButton">
                 <property name="visible">True</property>
@@ -213,11 +213,11 @@ along with PDF Arranger.  If not, see <http://www.gnu.org/licenses/>.
                   <class name="image-button"/>
                 </style>
               </object>
-              <packing>
+              <!--packing>
                 <property name="expand">False</property>
                 <property name="fill">True</property>
                 <property name="position">0</property>
-              </packing>
+              </packing-->
             </child>
             <child>
               <object class="GtkButton">
@@ -237,49 +237,50 @@ along with PDF Arranger.  If not, see <http://www.gnu.org/licenses/>.
                   <class name="image-button"/>
                 </style>
               </object>
-              <packing>
+              <!--packing>
                 <property name="expand">False</property>
                 <property name="fill">True</property>
                 <property name="position">1</property>
-              </packing>
+              </packing-->
             </child>
             <style>
               <class name="linked"/>
             </style>
           </object>
-          <packing>
+          <!--packing>
             <property name="pack_type">end</property>
             <property name="position">3</property>
-          </packing>
+          </packing-->
         </child>
       </object>
     </child>
     <child>
       <object class="GtkBox" id="main_box">
         <property name="visible">True</property>
-        <property name="orientation">vertical</property>
+        <property name="orientation">GTK_ORIENTATION_VERTICAL</property>
         <child>
           <object class="GtkScrolledWindow" id="scrolledwindow">
             <property name="visible">True</property>
+            <property name="vexpand">True</property>
             <child>
               <placeholder/>
             </child>
           </object>
-          <packing>
+          <!--packing>
             <property name="expand">True</property>
             <property name="fill">True</property>
             <property name="position">2</property>
-          </packing>
+          </packing-->
         </child>
         <child>
           <object class="GtkSeparator">
             <property name="visible">True</property>
           </object>
-          <packing>
+          <!--packing>
             <property name="expand">False</property>
             <property name="fill">True</property>
             <property name="position">3</property>
-          </packing>
+          </packing-->
         </child>
         <child>
           <!-- n-columns=2 n-rows=1 -->
@@ -294,13 +295,11 @@ along with PDF Arranger.  If not, see <http://www.gnu.org/licenses/>.
                 <property name="margin_top">4</property>
                 <property name="margin_bottom">4</property>
                 <property name="hexpand">True</property>
-                <property name="orientation">vertical</property>
-                <property name="spacing">1</property>
               </object>
-              <packing>
+              <!--packing>
                 <property name="left_attach">0</property>
                 <property name="top_attach">0</property>
-              </packing>
+              </packing-->
             </child>
             <child>
               <object class="GtkStatusbar" id="statusbar2">
@@ -311,20 +310,18 @@ along with PDF Arranger.  If not, see <http://www.gnu.org/licenses/>.
                 <property name="margin_top">4</property>
                 <property name="margin_bottom">4</property>
                 <property name="hexpand">True</property>
-                <property name="orientation">vertical</property>
-                <property name="spacing">1</property>
               </object>
-              <packing>
+              <!--packing>
                 <property name="left_attach">1</property>
                 <property name="top_attach">0</property>
-              </packing>
+              </packing-->
             </child>
           </object>
-          <packing>
+          <!--packing>
             <property name="expand">False</property>
             <property name="fill">True</property>
             <property name="position">4</property>
-          </packing>
+          </packing-->
         </child>
       </object>
     </child>

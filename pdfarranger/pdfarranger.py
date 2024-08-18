@@ -99,23 +99,8 @@ if os.name == 'nt':
 
 import gi
 
-# check that we don't need GObject.threads_init()
-gi.check_version('3.10.2')
-gi.require_version('Gtk', '3.0')
+gi.require_version('Gtk', '4.0')
 from gi.repository import Gtk
-try:
-    gi.require_version('Handy', '1')
-    from gi.repository import Handy
-except ValueError:
-    Handy = None
-
-if Gtk.check_version(3, 20, 0):
-    raise Exception('You do not have the required version of GTK+ installed. ' +
-                    'Installed GTK+ version is ' +
-                    '.'.join([str(Gtk.get_major_version()),
-                              str(Gtk.get_minor_version()),
-                              str(Gtk.get_micro_version())]) +
-                    '. Required GTK+ version is 3.20 or higher.')
 
 from gi.repository import Gdk
 from gi.repository import GObject  # for using custom signals
@@ -169,28 +154,9 @@ from . import exporter
 from . import metadata
 from . import pageutils
 from . import splitter
-from .iconview import CellRendererImage, IconviewCursor, IconviewDragSelect, IconviewPanView
 from .core import img2pdf_supported_img, PageAdder, PDFDocError, PDFRenderer
-GObject.type_register(CellRendererImage)
-
-
-def _install_workaround_bug29():
-    """ Install a workaround for https://gitlab.gnome.org/GNOME/pygobject/issues/29 """
-    try:
-        gi.check_version('3.29.2')
-    except ValueError:
-        def func(self, entries):
-            # simplified version of https://gitlab.gnome.org/GNOME/pygobject/commit/d0b219c
-            for d in entries:
-                param_type = None if len(d) < 3 else GLib.VariantType.new(d[2])
-                action = Gio.SimpleAction(name=d[0], parameter_type=param_type)
-                action.connect("activate", d[1], None)
-                self.add_action(action)
-
-        Gtk.ApplicationWindow.add_action_entries = func
-
-
-_install_workaround_bug29()
+from .gridview import GWItem, GridViewEnhanced
+#GObject.type_register(CellRendererImage)
 
 
 def malloc_trim():
@@ -225,20 +191,6 @@ def get_file_path_from_uri(uri):
 
 
 class PdfArranger(Gtk.Application):
-    # Drag and drop ID for pages coming from the same pdfarranger instance
-    MODEL_ROW_INTERN = 1001
-    # Drag and drop ID for pages coming from an other pdfarranger instance
-    MODEL_ROW_EXTERN = 1002
-    # Drag and drop ID for pages coming from a non-pdfarranger application
-    TEXT_URI_LIST = 1003
-    TARGETS_IV = [Gtk.TargetEntry.new('MODEL_ROW_INTERN', Gtk.TargetFlags.SAME_WIDGET,
-                                      MODEL_ROW_INTERN),
-                  Gtk.TargetEntry.new('MODEL_ROW_EXTERN', Gtk.TargetFlags.OTHER_APP,
-                                      MODEL_ROW_EXTERN)]
-    TARGETS_SW = [Gtk.TargetEntry.new('text/uri-list', 0, TEXT_URI_LIST),
-                  Gtk.TargetEntry.new('MODEL_ROW_EXTERN', Gtk.TargetFlags.OTHER_APP,
-                                      MODEL_ROW_EXTERN)]
-
     def __init__(self, *args, **kwargs):
         super().__init__(*args, application_id="com.github.jeromerobert.pdfarranger",
                          flags=Gio.ApplicationFlags.NON_UNIQUE |
@@ -261,7 +213,7 @@ class PdfArranger(Gtk.Application):
         self.sw = None
         self.model = None
         self.undomanager = None
-        self.iconview = None
+        self.gridview = None
         self.cellthmb = None
         self.status_bar = None
         self.popup = None
@@ -289,8 +241,6 @@ class PdfArranger(Gtk.Application):
         self.post_action = None
         self.save_file = None
         self.export_file = None
-        self.drag_path = None
-        self.drag_pos = Gtk.IconViewDropPosition.DROP_RIGHT
         self.window_width_old = 0
         self.set_iv_visible_id = None
         self.vadj_percent = None
@@ -299,9 +249,11 @@ class PdfArranger(Gtk.Application):
         multiprocessing.set_start_method('spawn')
         self.quit_flag = multiprocessing.Event()
         self.layer_pos = 0.5, 0.5
+        self.accumulated_y_step = 0
+        self.delayed_scroll = None
 
         # Clipboard for cut copy paste
-        self.clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+        self.clipboard = Gdk.Display.get_default().get_clipboard()
 
         self.add_arguments()
 
@@ -345,21 +297,6 @@ class PdfArranger(Gtk.Application):
             f = '/usr/local/share/{}/{}'.format(DOMAIN, path)
         return f
 
-    def set_color_scheme(self):
-        if Handy:
-            try:
-                scheme = Handy.ColorScheme.PREFER_LIGHT
-                if os.name == 'nt' and darkdetect.isDark():
-                    scheme = Handy.ColorScheme.PREFER_DARK
-                theme = self.config.theme()
-                if theme == 'dark':
-                    scheme = Handy.ColorScheme.FORCE_DARK
-                elif theme == 'light':
-                    scheme = Handy.ColorScheme.FORCE_LIGHT
-                Handy.StyleManager.get_default().set_color_scheme(scheme)
-            except AttributeError:
-                # This libhandy is too old. 1.5.90 needed ?
-                pass
 
     def __create_main_window(self):
         """Create the Gtk.ApplicationWindow or Handy.ApplicationWindow"""
@@ -367,28 +304,10 @@ class PdfArranger(Gtk.Application):
         b.set_translation_domain(DOMAIN)
         with open(self.__resource_path(DOMAIN + ".ui")) as ff:
             s = ff.read()
-            if Handy:
-                Handy.init()
-                s = s.replace("GtkHeaderBar", "HdyHeaderBar")
             b.add_from_string(s)
-        b.connect_signals(self)
+        #b.connect_signals(self)
         self.uiXML = b
         self.window = self.uiXML.get_object("main_window")
-        if Handy:
-            self.set_color_scheme()
-            # Add an intermediate vertical box
-            box = Gtk.Box()
-            box.props.orientation = Gtk.Orientation.VERTICAL
-            hd = self.uiXML.get_object("header_bar")
-            mb = self.uiXML.get_object("main_box")
-            self.window.remove(hd)
-            self.window.remove(mb)
-            # Replace the Gtk.ApplicationWindow by the Handy one
-            self.window = Handy.ApplicationWindow()
-            box.add(hd)
-            mb.props.expand = True
-            box.add(mb)
-            self.window.add(box)
         self.window.set_default_icon_name(ICON_ID)
         return b
 
@@ -396,9 +315,9 @@ class PdfArranger(Gtk.Application):
         b = Gtk.Builder()
         b.set_translation_domain(DOMAIN)
         b.add_from_file(self.__resource_path("menu.ui"))
-        b.connect_signals(self)
+        #b.connect_signals(self)
         self.config.set_actions(b)
-        self.popup = Gtk.Menu.new_from_model(b.get_object("popup_menu"))
+        #self.popup = Gtk.Menu.new_from_model(b.get_object("popup_menu"))
         self.popup.attach_to_widget(self.window, None)
         main_menu = self.uiXML.get_object("main_menu_button")
         main_menu.set_menu_model(b.get_object("main_menu"))
@@ -560,8 +479,10 @@ class PdfArranger(Gtk.Application):
         return filter_list
 
     def set_title(self, title, subtitle = None):
-        self.uiXML.get_object('header_bar').set_title(title)
-        self.uiXML.get_object('header_bar').set_subtitle(subtitle)
+        label = Gtk.Label(label=title)
+        self.uiXML.get_object('header_bar').set_title_widget(label)
+        #label.set_text(title)
+        #self.uiXML.get_object('header_bar').set_subtitle(subtitle)
 
     def do_activate(self):
         """ https://lazka.github.io/pgi-docs/Gio-2.0/classes/Application.html#Gio.Application.do_activate """
@@ -570,76 +491,62 @@ class PdfArranger(Gtk.Application):
         iconsdir = os.path.join(sharedir, 'icons')
         if not os.path.exists(iconsdir):
             iconsdir = os.path.join(sharedir, 'data', 'icons')
-        Gtk.IconTheme.get_default().append_search_path(iconsdir)
+        #Gtk.IconTheme.get_default().append_search_path(iconsdir)
+        Gtk.IconTheme.get_for_display(Gdk.Display.get_default()).add_search_path(iconsdir)
         self.__create_main_window()
         self.set_title(APPNAME)
-        self.window.set_border_width(0)
+        #self.window.set_border_width(0)
         self.window.set_application(self)
         if self.config.maximized():
             self.window.maximize()
-        self.window.set_default_size(*self.config.window_size())
-        self.window.move(*self.config.position())
-        self.window.connect('delete_event', self.on_quit)
-        self.window.connect('focus_in_event', self.window_focus_in_out_event)
-        self.window.connect('focus_out_event', self.window_focus_in_out_event)
-        self.window.connect('configure_event', self.window_configure_event)
+        #self.window.set_default_size(*self.config.window_size())
+        #self.window.move(*self.config.position())
+        self.window.connect('close_request', self.on_quit)
+        #self.window.connect('focus_in_event', self.window_focus_in_out_event)
+        #self.window.connect('focus_out_event', self.window_focus_in_out_event)
+        #self.window.connect('configure_event', self.window_configure_event)
+        self.window.connect('notify', self.window_notify_event)
 
         if hasattr(GLib, "unix_signal_add"):
             GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGINT, self.close_application)
 
         # Create a scrolled window to hold the thumbnails-container
         self.sw = self.uiXML.get_object('scrolledwindow')
-        self.sw.drag_dest_set(Gtk.DestDefaults.HIGHLIGHT |
-                              Gtk.DestDefaults.DROP,
-                              self.TARGETS_SW,
-                              Gdk.DragAction.COPY)
-        self.sw.connect('drag_data_received', self.sw_dnd_received_data)
-        self.sw.connect('button_press_event', self.sw_button_press_event)
-        self.sw.connect('scroll_event', self.sw_scroll_event)
 
-        # Create ListStore model and IconView
-        self.model = Gtk.ListStore(GObject.TYPE_PYOBJECT, str)
+        evc = Gtk.EventControllerScroll.new(Gtk.EventControllerScrollFlags.VERTICAL)
+        evc.connect("scroll", self.sw_scroll_event)
+        self.sw.add_controller(evc)
+
+        # Create ListStore model and GridView
+        #self.model = Gtk.ListStore(GObject.TYPE_PYOBJECT, str)
+        self.model = Gio.ListStore()
         self.undomanager = undo.Manager(self)
         self.zoom_set(self.config.zoom_level())
 
-        self.iconview = Gtk.IconView(self.model)
-        self.iconview.clear()
-        self.iconview.set_item_width(-1)
+        self.gridview = GridViewEnhanced(self.model, Gtk.MultiSelection())
 
-        self.cellthmb = CellRendererImage()
-        self.cellthmb.set_padding(3, 3)
-        self.cellthmb.set_alignment(0.5, 0.5)
-        self.iconview.pack_start(self.cellthmb, False)
-        self.iconview.set_cell_data_func(self.cellthmb, self.set_cellrenderer_data, None)
-        self.iconview.set_text_column(1)
-        cell_text_renderer = self.iconview.get_cells()[1]
-        cell_text_renderer.props.ellipsize = Pango.EllipsizeMode.MIDDLE
+        factory = Gtk.SignalListItemFactory()
+        factory.connect("setup", self.f_setup)
+        factory.connect("bind", self.f_bind)
+        #factory.connect("unbind", self.f_unbind)
+        self.gridview.set_factory(factory)
 
-        self.iconview.set_selection_mode(Gtk.SelectionMode.MULTIPLE)
-        self.iconview.enable_model_drag_source(Gdk.ModifierType.BUTTON1_MASK,
-                                               self.TARGETS_IV,
-                                               Gdk.DragAction.COPY |
-                                               Gdk.DragAction.MOVE)
-        self.iconview.enable_model_drag_dest(self.TARGETS_IV,
-                                             Gdk.DragAction.COPY |
-                                             Gdk.DragAction.MOVE)
-        self.iconview.connect('drag_begin', self.iv_drag_begin)
-        self.iconview.connect('drag_data_get', self.iv_dnd_get_data)
-        self.iconview.connect('drag_data_received', self.iv_dnd_received_data)
-        self.iconview.connect('drag_data_delete', self.iv_dnd_data_delete)
-        self.iconview.connect('drag_motion', self.iv_dnd_motion)
-        self.iconview.connect('drag_leave', self.iv_dnd_leave_end)
-        self.iconview.connect('drag_end', self.iv_dnd_leave_end)
-        self.iconview.connect('button_press_event', self.iv_button_press_event)
-        self.iconview.connect('motion_notify_event', self.iv_motion)
-        self.iconview.connect('button_release_event', self.iv_button_release_event)
-        self.iconview.connect('style_updated', self.set_text_renderer_cell_height)
-        self.id_selection_changed_event = self.iconview.connect('selection_changed',
-                                                          self.iv_selection_changed_event)
-        self.iconview.connect('key_press_event', self.iv_key_press_event)
-        self.iconview.connect('size_allocate', self.iv_size_allocate)
+        evc2 = Gtk.DragSource(actions=Gdk.DragAction.MOVE | Gdk.DragAction.COPY)
+        evc2.connect('drag_begin', self.iv_dragsource_begin)
+        #evc2.connect('drag_end', self.iv_droptarget_leave)
+        evc2.connect('drag_end', self.iv_dragsource_end)
+        evc2.connect('drag_cancel', self.iv_dragsource_cancel)
+        evc2.connect('prepare', self.iv_dragsource_prepare)
+        self.gridview.add_controller(evc2)
 
-        self.sw.add(self.iconview)
+        evc3 = Gtk.DropTarget.new(GObject.TYPE_NONE, Gdk.DragAction.MOVE | Gdk.DragAction.COPY)
+        evc3.connect('leave', self.iv_droptarget_leave)
+        evc3.connect('motion', self.iv_droptarget_motion)
+        evc3.connect('drop', self.iv_droptarget_drop)
+        evc3.set_gtypes([Gdk.FileList, str])
+        self.gridview.add_controller(evc3)
+
+        self.sw.set_child(self.gridview)
 
         # Status bar to the left
         self.status_bar = self.uiXML.get_object('statusbar')
@@ -649,42 +556,24 @@ class PdfArranger(Gtk.Application):
 
         # Vertical scrollbar
         vscrollbar = self.sw.get_vscrollbar()
-        vscrollbar.connect('value_changed', self.vscrollbar_value_changed)
-        vscrollbar.props.adjustment.step_increment = 75
+        adjustment = vscrollbar.get_adjustment()
+        adjustment.connect('value_changed', self.vadjustment_value_changed)
 
-        self.window.show_all()
+        self.window.set_default_size(800, 600)
+        self.window.present()
 
-        # Change iconview color background
-        style_context_sw = self.sw.get_style_context()
-        color_selected = self.iconview.get_style_context() \
-            .get_background_color(Gtk.StateFlags.SELECTED)
-        color_prelight = color_selected.copy()
-        color_prelight.alpha = 0.3
-        for state in (Gtk.StateFlags.NORMAL, Gtk.StateFlags.ACTIVE):
-            self.iconview.override_background_color(
-                state, style_context_sw.get_background_color(state))
-        self.iconview.override_background_color(Gtk.StateFlags.SELECTED,
-                                                color_selected)
-        self.iconview.override_background_color(Gtk.StateFlags.PRELIGHT,
-                                                color_prelight)
-
-        # Set cursor look and hide overshoot gradient
         style_provider = Gtk.CssProvider()
         css_data = """
-        iconview {
-            outline-color: alpha(currentColor, 0.8);
-            outline-style: dashed;
-            outline-offset: -2px;
-            outline-width: 2px;
-            -gtk-outline-radius: 2px;
+        gridview {
+            background-color:rgba(239, 240, 241, 0.3);
         }
-        scrolledwindow overshoot {
-            background: none;
+        gridview child:selected {
+            background-color:rgba(60, 173, 233, 1.0);
         }
         """
         style_provider.load_from_data(bytes(css_data.encode()))
-        Gtk.StyleContext.add_provider_for_screen(
-            Gdk.Screen.get_default(),
+        Gtk.StyleContext.add_provider_for_display(
+            Gdk.Display.get_default(),
             style_provider,
             Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
 
@@ -694,14 +583,40 @@ class PdfArranger(Gtk.Application):
                             GObject.TYPE_PYOBJECT, GObject.TYPE_BOOLEAN])
         self.set_unsaved(False)
         self.__create_actions()
-        self.__create_menus()
+        #self.__create_menus()
 
-        self.iv_cursor = IconviewCursor(self)
-        self.iv_drag_select = IconviewDragSelect(self)
-        self.iv_pan_view = IconviewPanView(self)
+        #self.iv_cursor = IconviewCursor(self)
+        #self.iv_drag_select = IconviewDragSelect(self)
+        #self.iv_pan_view = IconviewPanView(self)
 
         if self.config.content_loss_warning():
             self.content_loss_warning()
+
+    def f_setup(self, fact, listitem):
+        gwitem = GWItem()
+        listitem.set_child(gwitem)
+        gwitem.connect('map', self.on_gwitem_map)
+
+    def on_gwitem_map(self, gwitem):
+        drawingarea = gwitem.get_first_child()
+        page = self.model[gwitem.position - 1]
+        w = page.width_in_pixel()
+        h = page.height_in_pixel()
+        drawingarea.set_content_width(w + 2)
+        drawingarea.set_content_height(h + 2)
+
+    def f_bind(self, fact, listitem):
+        page = listitem.get_item()
+
+        gridviewitem = listitem.get_child()
+
+        label = gridviewitem.get_last_child()
+        label.set_label("Page " + str(page.npage))
+
+        #drawingarea = gridviewitem.get_first_child()
+        listitem.bind_property("position", gridviewitem, "position", GObject.BindingFlags.SYNC_CREATE)
+        page.bind_property("angle", gridviewitem, "angle", GObject.BindingFlags.SYNC_CREATE)
+        page.bind_property("thumbnail", gridviewitem, "thumbnail", GObject.BindingFlags.SYNC_CREATE)
 
     def do_command_line(self, command_line):
         options = command_line.get_options_dict()
@@ -735,26 +650,6 @@ class PdfArranger(Gtk.Application):
 
         a.commit(select_added=False, add_to_undomanager=True)
 
-    @staticmethod
-    def set_text_renderer_cell_height(iconview):
-        """Update text renderer cell height on style update.
-
-        Having a fixed height will improve speed.
-        Cell height is: "number of rows" * "text height" + 2 * padding
-        At start cell will have the height of 1 row + paddings.
-        """
-        cell_text_renderer = iconview.get_cells()[1]
-        cell_text_renderer.set_fixed_size(-1, -1)
-        paddy = cell_text_renderer.get_padding()[1]
-        natural_height = cell_text_renderer.get_preferred_height(iconview)[1]
-        text = cell_text_renderer.props.text
-        height = 2 * (natural_height - paddy) if text is None else natural_height
-        cell_text_renderer.set_fixed_size(-1, height)
-
-    @staticmethod
-    def set_cellrenderer_data(_column, cell, model, it, _data=None):
-        cell.set_page(model.get_value(it, 0))
-
     def render(self):
         self.render_id = None
         if not self.sw.is_sensitive():
@@ -763,8 +658,8 @@ class PdfArranger(Gtk.Application):
         if alive:
             self.silent_render()
             return
-        self.visible_range = self.get_visible_range2()
-        columns_nr = self.iconview.get_columns()
+        self.visible_range = self.gridview.get_visible_range()
+        columns_nr = 5 #self.gridview.get_columns()
         self.rendering_thread = PDFRenderer(self.model, self.pdfqueue,
                                             self.visible_range , columns_nr)
         self.rendering_thread.connect('update_thumbnail', self.update_thumbnail)
@@ -809,32 +704,13 @@ class PdfArranger(Gtk.Application):
                     self._th().model_lock.release()
         return __RenderLock(self)
 
-    def vscrollbar_value_changed(self, _vscrollbar):
-        """Render when vertical scrollbar value has changed."""
+    def vadjustment_value_changed(self, _vscrollbar):
+        """Render when vertical adjustment value has changed."""
         self.silent_render()
 
-    def window_configure_event(self, _window, event):
+    def window_notify_event(self, _window, event):
         """Handle window size and position changes."""
-        if self.window_width_old not in [0, event.width] and len(self.model) > 0:
-            if self.set_iv_visible_id:
-                GObject.source_remove(self.set_iv_visible_id)
-            self.set_iv_visible_id = GObject.timeout_add(500, self.set_iconview_visible)
-            self.iconview.set_visible(False)
-        self.window_width_old = event.width
-        if len(self.model) > 1: # Don't trigger extra render after first page is inserted
-            self.silent_render()
-
-    def set_iconview_visible(self):
-        self.set_iv_visible_id = None
-        if len(self.iconview.get_selected_items()) == 0:
-            self.vadj_percent_handler(store=True)
-        self.update_iconview_geometry()
-        self.scroll_to_selection()
-        self.sw.set_visible(False)
-        self.sw.set_visible(True)
-        GObject.idle_add(self.iconview.set_visible, True)
-        self.iconview.grab_focus()
-        self.silent_render()
+        self.gridview.update_geometry()
 
     def set_save_file(self, file):
         if file != self.save_file:
@@ -863,24 +739,27 @@ class PdfArranger(Gtk.Application):
         self.set_title(title, subtitle)
         return False
 
-    def update_thumbnail(self, _obj, ref, thumbnail, zoom, scale, is_preview):
+    def update_thumbnail(self, _obj, num, thumbnail, zoom, scale, is_preview):
         """Update thumbnail emitted from rendering thread."""
-        if ref is None:
+        if num is None:
             # Rendering ended
             ctxt_id = self.status_bar2.get_context_id("rendering")
             self.status_bar2.remove_all(ctxt_id)
             malloc_trim()
             return
-        path = ref.get_path()
-        if path is None:
-            # Page no longer exist
+        #path = ref.get_path()
+        #if path is None:
+        #    # Page no longer exist
+        #    return
+        #if (self.visible_range[0] <= path.get_indices()[0] <= self.visible_range[1] and
+        #        zoom != self.zoom_scale):
+        #    # Thumbnail is in the visible range but is not rendered for current zoom level
+        #    self.silent_render()
+        #    return
+        #page = self.model[path][0]
+        if num > len(self.model) - 1:
             return
-        if (self.visible_range[0] <= path.get_indices()[0] <= self.visible_range[1] and
-                zoom != self.zoom_scale):
-            # Thumbnail is in the visible range but is not rendered for current zoom level
-            self.silent_render()
-            return
-        page = self.model[path][0]
+        page = self.model[num]
         if page.scale != scale:
             # Page scale was changed while page was rendered -> trash & rerender
             self.silent_render()
@@ -889,48 +768,15 @@ class PdfArranger(Gtk.Application):
         page.resample = 1 / zoom
         if is_preview:
             page.preview = thumbnail
-        # Let iconview refresh the thumbnail (only) by selecting it
-        with GObject.signal_handler_block(self.iconview, self.id_selection_changed_event):
-            if self.iconview.path_is_selected(path):
-                self.iconview.unselect_path(path)
-                self.iconview.select_path(path)
-            else:
-                self.iconview.select_path(path)
-                self.iconview.unselect_path(path)
-        ac = self.iconview.get_accessible().ref_accessible_child(path.get_indices()[0])
-        ac.set_description(page.description())
 
-    def get_visible_range2(self):
-        """Get range of items visible in window.
+        start, end = self.gridview.get_visible_range()
+        if start <= num <= end:
+            listitemwidget = self.gridview.get_listitemwidget(num)
+            if listitemwidget:
+                gwitem = listitemwidget.get_first_child()
+                gwitem.update_thumbnail()
 
-        A item is considered visible if more than 50% of item is visible.
-        """
-        vr = self.iconview.get_visible_range()
-        if vr is None:
-            return -1, -1
-        first_ind = vr[0].get_indices()[0]
-        last_ind = vr[1].get_indices()[0]
-        first_cell = self.iconview.get_cell_rect(vr[0])[1]
-        last_cell = self.iconview.get_cell_rect(vr[1])[1]
-        sw_height = self.sw.get_allocated_height()
-        if first_cell.y + first_cell.height * 0.5 < 0:
-            columns_nr = self.iconview.get_columns()
-            first_ind = min(first_ind + columns_nr, len(self.model) - 1)
-        if last_cell.y + last_cell.height * 0.5 > sw_height:
-            last_item_col = self.iconview.get_item_column(vr[1])
-            last_ind = max(last_ind - last_item_col - 1, 0)
-        return min(first_ind, last_ind), max(first_ind, last_ind)
-
-    def hide_horizontal_scrollbar(self):
-        """Hide horizontal scrollbar when not needed."""
-        sw_hadj = self.sw.get_hadjustment()
-        hscrollbar = self.sw.get_hscrollbar()
-        if sw_hadj.get_upper() <= self.sw.get_allocated_width():
-            hscrollbar.hide()
-        else:
-            hscrollbar.show()
-
-    def update_iconview_geometry(self):
+    def update_geometry_old(self):
         """Set iconview cell size, margins, number of columns and spacing."""
         if len(self.model) > 0:
             item_width = max(row[0].width_in_pixel() for row in self.model)
@@ -960,29 +806,6 @@ class PdfArranger(Gtk.Application):
             self.iconview.set_columns(col_num)
             self.iconview.set_column_spacing(spacing)
             self.iconview.set_margin(margin)
-
-    def vadj_percent_handler(self, store=False, restore=False):
-        """Store and restore adjustment percentual value."""
-        sw_vadj = self.sw.get_vadjustment()
-        lower_limit = sw_vadj.get_lower()
-        upper_limit = sw_vadj.get_upper()
-        page_size = sw_vadj.get_page_size()
-        sw_vpos = sw_vadj.get_value()
-        vadj_range = upper_limit - lower_limit - page_size
-        if store and self.vadj_percent is None and vadj_range > 0:
-            self.vadj_percent = (sw_vpos - lower_limit) / vadj_range
-        if restore and self.vadj_percent is not None:
-            sw_vadj.set_value(self.vadj_percent * vadj_range + lower_limit)
-            self.vadj_percent = None
-
-    def iv_size_allocate(self, _iconview, _allocation):
-        self.hide_horizontal_scrollbar()
-        self.set_adjustment_limits()
-        if self.vadj_percent is not None and not self.zoom_fit_page:
-            self.vadj_percent_handler(restore=True)
-        if self.scroll_path:
-            GObject.idle_add(self.scroll_to_path2, self.scroll_path)
-            self.scroll_path = None
 
     def set_adjustment_limits(self):
         hscrollbar = self.sw.get_hscrollbar()
@@ -1038,9 +861,8 @@ class PdfArranger(Gtk.Application):
         self.clear_data()
 
     def clear_data(self):
-        self.iconview.unselect_all()
         with self.render_lock():
-            self.model.clear()
+            self.model.remove_all()
         self.pdfqueue = []
         self.metadata = {}
         self.undomanager.clear()
@@ -1089,17 +911,14 @@ class PdfArranger(Gtk.Application):
                 self.export_process.terminate()
                 self.export_process.join()
 
-        # Prevent gtk errors when closing with everything selected
-        self.iconview.unselect_all()
-        self.iconview.get_model().clear()
-
         # Release Poppler.Document instances to unlock all temporary files
         self.pdfqueue = []
         gc.collect()
-        self.config.set_window_size(self.window.get_size())
+        size = self.window.get_size(Gtk.Orientation.VERTICAL), self.window.get_size(Gtk.Orientation.HORIZONTAL)
+        self.config.set_window_size(size)
         self.config.set_maximized(self.window.is_maximized())
         self.config.set_zoom_level(round(self.zoom_level))
-        self.config.set_position(self.window.get_position())
+        #self.config.set_position(self.window.get_position())
         self.config.save()
         if os.path.isdir(self.tmp_dir):
             shutil.rmtree(self.tmp_dir)
@@ -1164,7 +983,7 @@ class PdfArranger(Gtk.Application):
                 file_out = file_out + ext
             files_out = [file_out]
             if exportmode in ['ALL_TO_MULTIPLE', 'SELECTED_TO_MULTIPLE']:
-                s = self.iconview.get_selected_items()
+                s = self.gridview.get_selected_items()
                 len_files = len(self.model) if exportmode == 'ALL_TO_MULTIPLE' else len(s)
                 for i in range(1, len_files):
                     files_out.append(self.get_cnt_filename(files_out[-1], need_cnt=True))
@@ -1257,7 +1076,7 @@ class PdfArranger(Gtk.Application):
     def save(self, exportmode, files_out):
         """Saves to the specified file."""
         if exportmode in ['SELECTED_TO_SINGLE', 'SELECTED_TO_MULTIPLE']:
-            selection = reversed(self.iconview.get_selected_items())
+            selection = reversed(self.gridview.get_selected_items())
             pages = [self.model[row][0].duplicate(incl_thumbnail=False) for row in selection]
         else:
             pages = [row[0].duplicate(incl_thumbnail=False) for row in self.model]
@@ -1344,8 +1163,8 @@ class PdfArranger(Gtk.Application):
             self.window_focus_in_out_event()
             self.iv_selection_changed_event()
             self.silent_render()
-            self.iconview.grab_focus()
-        self.iconview.get_window().set_cursor(cursor)
+            self.gridview.grab_focus()
+        self.gridview.get_window().set_cursor(cursor)
 
     def choose_export_selection_pdf_name(self, _action, mode, _unknown):
         exportmodes = {0: 'ALL_TO_SINGLE',
@@ -1372,28 +1191,22 @@ class PdfArranger(Gtk.Application):
         chooser.destroy()
 
     def clear_selected(self, add_to_undomanager=True):
-        """Removes the selected elements in the IconView"""
+        """Removes the selected elements in the GridView"""
         if add_to_undomanager:
             self.undomanager.commit("Delete")
-        model = self.iconview.get_model()
-        selection = self.iconview.get_selected_items()
-        selection.sort(reverse=True)
+
+        selection = self.gridview.get_selected_items()
+        nitems = selection.get_size()
+        first = selection.get_nth(0)
+
+        self.model.splice(position=first, n_removals=nitems, additions=[])
         self.set_unsaved(True)
-        with GObject.signal_handler_block(self.iconview, self.id_selection_changed_event):
-            with self.render_lock():
-                for path in selection:
-                    model.remove(model.get_iter(path))
-            path = selection[-1]
-            self.iconview.select_path(path)
-            if not self.iconview.path_is_selected(path):
-                if len(model) > 0:  # select the last row
-                    row = model[-1]
-                    path = row.path
-                    self.iconview.select_path(path)
-        self.scroll_path = path
-        self.update_iconview_geometry()
-        self.iv_selection_changed_event()
-        self.iconview.grab_focus()
+
+        first = min(first, len(self.model) - 1)
+        self.gridview.select_num(first)
+
+        GObject.idle_add(self.gridview.scroll_to_num, first)
+        self.gridview.update_geometry()
         self.silent_render()
         self.update_max_zoom_level()
         malloc_trim()
@@ -1415,14 +1228,14 @@ class PdfArranger(Gtk.Application):
     def copy_pages(self, add_hash=True):
         """Collect data from selected pages"""
 
-        model = self.iconview.get_model()
-        selection = self.iconview.get_selected_items()
-        selection.sort(key=lambda x: x.get_indices()[0])
+        model = self.gridview.get_model()
+        selection = self.gridview.get_selected_items()
 
         data = []
-        for path in selection:
-            it = model.get_iter(path)
-            data.append(model.get_value(it, 0).serialize())
+        for num in range(selection.get_size()):
+            i = selection.get_nth(num)
+            print(i)
+            data.append(self.model[i].serialize())
 
         if data:
             data = '\n;\n'.join(data)
@@ -1431,30 +1244,30 @@ class PdfArranger(Gtk.Application):
                 data = h + '\n' + data
         return data
 
-    def paste_pages(self, data, before, ref_to, select_added):
-        """Paste pages to iconview"""
+    def paste_pages(self, data, before, num, select_added):
+        """Paste pages to gridview"""
 
         pageadder = PageAdder(self)
-        if ref_to:
-            pageadder.move(ref_to, before)
+        if num is not None:
+            pageadder.move(num, before)
 
         for d in data:
             pageadder.addpages(*d)
         return pageadder.commit(select_added, add_to_undomanager=True)
 
-    def paste_files(self, filepaths, before, ref_to):
-        """Paste files to iconview."""
+    def paste_files(self, filepaths, before, num):
+        """Paste files to gridview."""
         pageadder = PageAdder(self)
 
         for filepath in filepaths:
-            pageadder.move(ref_to, before)
+            pageadder.move(num, before)
             pageadder.addpages(filepath)
         pageadder.commit(select_added=False, add_to_undomanager=True)
 
     def paste_pages_interleave(self, data, before, ref_to):
-        """Paste pages or files interleved to iconview."""
+        """Paste pages or files interleved to gridview."""
         pageadder = PageAdder(self)
-        model = self.iconview.get_model()
+        model = self.gridview.get_model()
         scroll = len(model) > 0
         iter_to = None
         iref = ref_to.get_path().get_indices()[0] if ref_to else 0
@@ -1483,10 +1296,10 @@ class PdfArranger(Gtk.Application):
         if scroll:
             iscroll = iref if before else iref + 1
             scroll_path = Gtk.TreePath.new_from_indices([iscroll])
-            self.iconview.scroll_to_path(scroll_path, False, 0, 0)
+            self.gridview.scroll_to_path(scroll_path, False, 0, 0)
 
     def on_action_delete(self, _action, _parameter, _unknown):
-        """Removes the selected elements in the IconView"""
+        """Removes the selected elements in the GridView"""
 
         self.clear_selected()
 
@@ -1500,7 +1313,15 @@ class PdfArranger(Gtk.Application):
     def on_action_copy(self, _action, _param, _unknown):
         """Copy selected pages to clipboard."""
         data = self.copy_pages()
-        self.clipboard.set_text('pdfarranger-clipboard\n' + data, -1)
+        #value = GObject.Value()
+        provider = Gdk.ContentProvider.new_for_value('pdfarranger-clipboard\n' + data)
+        self.clipboard.set_content(provider)
+
+        #value.set_string('pdfarranger-clipboard\n' + data)
+
+        #self.clipboard.set('pdfarranger-clipboard\n' + data)
+
+        #self.clipboard.set_text('pdfarranger-clipboard\n' + data, -1)
         self.window.lookup_action("paste").set_enabled(True)
 
     def on_action_paste(self, _action, mode, _unknown):
@@ -1544,13 +1365,13 @@ class PdfArranger(Gtk.Application):
                     return
                 data = filepaths
             self.paste_pages_interleave(data, before, ref_to)
-            self.update_iconview_geometry()
+            self.update_geometry()
             GObject.idle_add(self.retitle)
             self.iv_selection_changed_event()
             self.update_max_zoom_level()
             self.silent_render()
         elif pastemode in ['OVERLAY', 'UNDERLAY'] and not data_is_filepaths:
-            selection = self.iconview.get_selected_items()
+            selection = self.gridview.get_selected_items()
             self.paste_as_layer(data, selection, laypos=pastemode)
 
     def paste_as_layer(self, data, destination, laypos, offset_xy=None):
@@ -1633,7 +1454,7 @@ class PdfArranger(Gtk.Application):
         If an image is found it is stored as a temporary png file.
         If id "pdfarranger-clipboard" is found pages is expected to be in clipboard, else file paths.
         """
-        if len(img2pdf_supported_img) > 0 and self.clipboard.wait_is_image_available():
+        if False:#len(img2pdf_supported_img) > 0 and self.clipboard.wait_is_image_available():
             data_is_filepaths = True
             image = self.clipboard.wait_for_image()
             if image is None:
@@ -1644,7 +1465,19 @@ class PdfArranger(Gtk.Application):
                 image.savev(filename, "png", [], [])
                 data = [filename]
         else:
-            data = self.clipboard.wait_for_text()
+            #data = self.clipboard.wait_for_text()
+            #self.clipboard.read_text_async(cancellable=None, callback=self.process_cb_data, user_data=mode)
+            #result = self.clipboard.read_text_async()
+            #data = self.clipboard.read_text_finish(result)
+
+            content = self.clipboard.get_content()
+            formats = content.ref_formats()
+            success, value = content.get_value()
+            data = value.get_string()
+
+    #def process_cb_data(self, clipboard, task, mode):
+            data = self.clipboard.read_text_finish(task)
+            print(data)
             if not data:
                 data = ''
 
@@ -1717,9 +1550,9 @@ class PdfArranger(Gtk.Application):
 
     def set_paste_location(self, pastemode):
         """Sets reference where pages should be pasted and if before or after that."""
-        model = self.iconview.get_model()
+        model = self.gridview.get_model()
 
-        selection = self.iconview.get_selected_items()
+        selection = self.gridview.get_selected_items()
         selection.sort(key=lambda x: x.get_indices()[0])
         if len(model) == 0:
             before = True
@@ -1781,7 +1614,7 @@ class PdfArranger(Gtk.Application):
 
     def on_action_extract(self, _action, option, _unknown):
         """Copy image or text in selected page to clipboard."""
-        s = self.iconview.get_selected_items()
+        s = self.gridview.get_selected_items()
         page = self.model[s[-1]][0]
         if option.get_int32() == 0:  # Image
             nimages = self.get_nimages_in_page(page)
@@ -1819,7 +1652,7 @@ class PdfArranger(Gtk.Application):
             return
         self.set_export_state(True, _("Exploding into images…"))
         self.process_pending_events()
-        s = self.iconview.get_selected_items()
+        s = self.gridview.get_selected_items()
         imgbufs = []
         for row in reversed(s):
             page = self.model[row][0]
@@ -1840,57 +1673,104 @@ class PdfArranger(Gtk.Application):
         selectoptions = {0: 'ALL', 1: 'DESELECT', 2: 'ODD', 3: 'EVEN',
                          4: 'SAME_FILE', 5: 'SAME_FORMAT', 6:'INVERT'}
         selectoption = selectoptions[option.get_int32()]
-        model = self.iconview.get_model()
-        with GObject.signal_handler_block(self.iconview, self.id_selection_changed_event):
-            if selectoption == 'ALL':
-                self.iconview.select_all()
-            elif selectoption == 'DESELECT':
-                self.iconview.unselect_all()
-            elif selectoption == 'ODD':
-                for page_number, row in enumerate(model, start=1):
-                    if page_number % 2:
-                        self.iconview.select_path(row.path)
-                    else:
-                        self.iconview.unselect_path(row.path)
-            elif selectoption == 'EVEN':
-                for page_number, row in enumerate(model, start=1):
-                    if page_number % 2:
-                        self.iconview.unselect_path(row.path)
-                    else:
-                        self.iconview.select_path(row.path)
-            elif selectoption == 'SAME_FILE':
-                selection = self.iconview.get_selected_items()
-                copynames = set(model[row][0].copyname for row in selection)
-                for page_number, row in enumerate(model):
-                    if model[page_number][0].copyname in copynames:
-                        self.iconview.select_path(row.path)
-            elif selectoption == 'SAME_FORMAT':
-                selection = self.iconview.get_selected_items()
-                formats = set(model[row][0].size_in_points() for row in selection)
-                # Chop digits to detect same page format on rotated cropped pages
-                formats = [(round(w, 8), round(h, 8)) for (w, h) in formats]
-                for row in model:
-                    page = model[row.path][0]
-                    w, h = page.size_in_points()
-                    if (round(w, 8), round(h, 8)) in formats:
-                        self.iconview.select_path(row.path)
-            elif selectoption == 'INVERT':
-                for row in model:
-                    if self.iconview.path_is_selected(row.path):
-                        self.iconview.unselect_path(row.path)
-                    else:
-                        self.iconview.select_path(row.path)
+        model = self.gridview.get_model()
+        #with GObject.signal_handler_block(self.gridview, self.id_selection_changed_event):
+        if selectoption == 'ALL':
+            self.gridview.multi_selection.select_all()
+        elif selectoption == 'DESELECT':
+            self.gridview.unselect_all()
+        elif selectoption == 'ODD':
+            for page_number, row in enumerate(model, start=1):
+                if page_number % 2:
+                    self.gridview.select_path(row.path)
+                else:
+                    self.gridview.unselect_path(row.path)
+        elif selectoption == 'EVEN':
+            for page_number, row in enumerate(model, start=1):
+                if page_number % 2:
+                    self.gridview.unselect_path(row.path)
+                else:
+                    self.gridview.select_path(row.path)
+        elif selectoption == 'SAME_FILE':
+            selection = self.gridview.get_selected_items()
+            copynames = set(model[row][0].copyname for row in selection)
+            for page_number, row in enumerate(model):
+                if model[page_number][0].copyname in copynames:
+                    self.gridview.select_path(row.path)
+        elif selectoption == 'SAME_FORMAT':
+            selection = self.gridview.get_selected_items()
+            formats = set(model[row][0].size_in_points() for row in selection)
+            # Chop digits to detect same page format on rotated cropped pages
+            formats = [(round(w, 8), round(h, 8)) for (w, h) in formats]
+            for row in model:
+                page = model[row.path][0]
+                w, h = page.size_in_points()
+                if (round(w, 8), round(h, 8)) in formats:
+                    self.gridview.select_path(row.path)
+        elif selectoption == 'INVERT':
+            for row in model:
+                if self.gridview.path_is_selected(row.path):
+                    self.gridview.unselect_path(row.path)
+                else:
+                    self.gridview.select_path(row.path)
         self.iv_selection_changed_event()
 
+    def iv_dragsource_begin(self, drag_source, _object):
+        """Sets custom drag icon."""
+        selection = self.gridview.get_selected_items()
+        num = selection.get_nth(0)
+        thumbnail = self.gridview.get_drawingarea(num)
+        a = thumbnail.get_allocation()
+        icon = Gtk.WidgetPaintable.new(thumbnail)
+
+        icon3 = icon.get_current_image()
+        #icon3.scale(1,1)
+        paintable = Gdk.Paintable.new_empty(16, 16)
+
+        #w = icon3.get_widget()
+
+        #snapshotn = Gtk.Snapshot.new()
+        #ngt = icon.snapshot(paintable, 16, 16)
+        #print("NGT", ngt )
+        #icon2 = Gtk.WidgetPaintable.new(snapshotn)
+
+        drag_source.set_icon(icon, a.width/2, a.height/2)
+
     @staticmethod
-    def iv_drag_begin(iconview, context):
+    def iv_dragsource_begin_old(self, drag_source, context):
         """Sets custom drag icon."""
         selected_count = len(iconview.get_selected_items())
         stock_icon = "gtk-dnd-multiple" if selected_count > 1 else "gtk-dnd"
         iconview.stop_emission('drag_begin')
         Gtk.drag_set_icon_name(context, stock_icon, 16, 16)
 
-    def iv_dnd_get_data(self, _iconview, _context,
+    def iv_dragsource_prepare(self, drag_source, x, y):
+        """Handles requests for data by drag and drop in gridview"""
+
+        #drag_source.set_actions(Gdk.DragAction.COPY)
+        selection = self.gridview.get_selected_items()
+
+        #data = Gtk.ListStore()
+        for num in range(selection.get_size()):
+            item_num = selection.get_nth(num)
+            self.model[item_num].delete_flag = True
+
+            #data.append(self.model[num].serialize())
+        #    data.append(self.model[num].duplicate)
+
+        #content = Gdk.ContentProvider.new_for_value(GObject.Value(Gio.ListModel, data))
+        #return content
+
+        #item = Gdk.ContentProvider.new_for_value(self.model[selection.get_nth(0)])
+        data = self.copy_pages(add_hash=False)
+        #print(data)
+
+        item = Gdk.ContentProvider.new_for_value(self.gridview)
+        string = Gdk.ContentProvider.new_for_value(data)
+        #string = Gdk.ContentProvider.new_for_value(self.model[selection.get_nth(0)].serialize())
+        return Gdk.ContentProvider.new_union([item, string])
+
+    def iv_dragsource_prepare_old(self, _iconview, _context,
                         selection_data, _target_id, _etime):
         """Handles requests for data by drag and drop in iconview"""
 
@@ -1911,7 +1791,33 @@ class PdfArranger(Gtk.Application):
             return
         selection_data.set(selection_data.get_target(), 8, data.encode())
 
-    def iv_dnd_received_data(self, iconview, context, _x, _y,
+    def iv_droptarget_drop(self, drop_target, value, x, y):
+        print("iv_droptarget_drop")
+        """Handles received data by drag and drop in gridview"""
+        dp = self.gridview.drag_pos
+        num = self.gridview.drag_num
+        before = True
+        if dp == 'BEFORE':
+            before = True
+        elif dp == 'AFTER':
+            before = False
+        elif len(self.model) > 0:
+            return drop_target.reject()
+        if isinstance(value, str):
+            data = self.deserialize(value.split('\n;\n'))
+            self.paste_pages(data, before, num, select_added=True)
+        elif isinstance(value, Gdk.FileList):
+            files = [f.get_path() for f in value.get_files()]
+            self.paste_files(files, before, num)
+        self.gridview.unset_all_drag_dest_item()
+        move = drop_target.get_actions() & Gdk.DragAction.MOVE
+        self.undomanager.commit("Move" if move else "Copy")
+        self.set_unsaved(True)
+        GObject.idle_add(self.render)
+
+        return True  # Accept the drop
+
+    def iv_droptarget_drop_old(self, iconview, context, _x, _y,
                              selection_data, _target_id, etime):
         """Handles received data by drag and drop in iconview"""
 
@@ -1958,36 +1864,78 @@ class PdfArranger(Gtk.Application):
             if changed and context.get_selected_action() & Gdk.DragAction.MOVE:
                 context.finish(True, True, etime)
 
-    def iv_dnd_data_delete(self, _widget, _context):
+    def iv_dragsource_cancel(self, _widget, _context, b):
+        print("iv_dragsource_cancel")
+        for page in self.model:
+            page.delete_flag = False
+
+    def iv_dragsource_end(self, drag_source, drag, delete_data):
         """Delete pages from a pdfarranger instance after they have
         been moved to another instance."""
-        if self.target_is_intern and os.name == 'nt':
-            # Workaround for windows
-            # On Windows this method is in some situations triggered even for drag & drop
-            # within the same pdfarranger instance
-            return
-        selection = self.iconview.get_selected_items()
+
+        if delete_data:
+            delete_list = []
+            for num, page in enumerate(self.model):
+                if page.delete_flag:
+                    delete_list.append(num)
+            for num in reversed(delete_list):
+                self.model.remove(num)
+        else:
+            for page in self.model:
+                page.delete_flag = False
+
+        self.gridview.unset_all_drag_dest_item()
         self.undomanager.commit("Move")
         self.set_unsaved(True)
-        model = self.iconview.get_model()
-        ref_del_list = [Gtk.TreeRowReference.new(model, path) for path in selection]
-        with self.render_lock():
-            for ref_del in ref_del_list:
-                path = ref_del.get_path()
-                model.remove(model.get_iter(path))
-        self.update_iconview_geometry()
+        self.gridview.update_geometry()
         GObject.idle_add(self.render)
         malloc_trim()
 
-    def iv_dnd_motion(self, iconview, context, x, y, etime):
+    def iv_droptarget_motion(self, dropcontroller, x, y):
+        #print(dropcontroller)
+        """Handles drag motion: autoscroll, select move or copy, select drag cursor location."""
+        # Block dnd when a modal dialog is open
+        # for w in self.window.list_toplevels():
+        #     if w.get_modal():
+        #         self.gridview.stop_emission('drag_motion')
+        #         return Gdk.EVENT_PROPAGATE
+
+        model = self.gridview.get_model()
+        if len(model) == 0:
+            return Gdk.EVENT_STOP
+
+        row_distance = 0
+        col_num = self.gridview.get_min_columns()
+        width = self.sw.get_allocation().width
+        cell_width = int((width / col_num) / 2) - 5
+        #print(cell_width)
+
+        search_positions = [('XY', x, y),
+                            ('Right', x + cell_width, y),
+                            ('Left', x - cell_width, y),
+                            ('Above', x, y - cell_width),
+                            ('Below', x, y + cell_width)]
+        for search_pos, x_s, y_s in search_positions:
+            num, area = self.gridview.get_num_at_pos(x_s, y_s)
+            if num:
+                break
+        if search_pos in ['XY', 'Right', 'Left', 'Below', 'Above']:
+            pass
+        else:
+            #gridview.stop_emission('drag_motion')
+            return Gdk.EVENT_PROPAGATE
+        self.gridview.set_drag_dest_item(num, area)
+        return Gdk.EVENT_STOP
+
+    def iv_droptarget_motion_old(self, gridview, context, x, y, etime):
         """Handles drag motion: autoscroll, select move or copy, select drag cursor location."""
         # Block dnd when a modal dialog is open
         for w in self.window.list_toplevels():
             if w.get_modal():
-                iconview.stop_emission('drag_motion')
+                gridview.stop_emission('drag_motion')
                 return Gdk.EVENT_PROPAGATE
 
-        x, y = iconview.convert_widget_to_bin_window_coords(x, y)
+        x, y = gridview.convert_widget_to_bin_window_coords(x, y)
 
         # Auto-scroll when drag up/down
         self.iv_autoscroll(x, y, autoscroll_area=40)
@@ -2044,51 +1992,27 @@ class PdfArranger(Gtk.Application):
         iconview.set_drag_dest_item(self.drag_path, self.drag_pos)
         return Gdk.EVENT_STOP
 
-    def iv_autoscroll(self, x, y, autoscroll_area):
-        """Iconview auto-scrolling."""
-        sw_vadj = self.sw.get_vadjustment()
-        if y < sw_vadj.get_value() + autoscroll_area:
-            if not self.iv_auto_scroll_timer:
-                self.iv_auto_scroll_timer = GObject.timeout_add(150, self.iv_auto_scroll, 'UP')
-        elif y > sw_vadj.get_page_size() + sw_vadj.get_value() - autoscroll_area:
-            if not self.iv_auto_scroll_timer:
-                self.iv_auto_scroll_timer = GObject.timeout_add(150, self.iv_auto_scroll, 'DOWN')
-        elif self.iv_auto_scroll_timer:
-            GObject.source_remove(self.iv_auto_scroll_timer)
-            self.iv_auto_scroll_timer = None
+    def iv_droptarget_leave(self, droptarget):
 
-    def iv_dnd_leave_end(self, _widget, _context, _ignored=None):
+        return
         """Ends the auto-scroll during DND"""
 
         if self.iv_auto_scroll_timer:
             GObject.source_remove(self.iv_auto_scroll_timer)
             self.iv_auto_scroll_timer = None
 
-    def iv_auto_scroll(self, direction):
-        """Timeout routine for auto-scroll"""
-        sw_vadj = self.sw.get_vadjustment()
-        step = sw_vadj.get_step_increment()
-        step = -step if direction == "UP" else step
-        with GObject.signal_handler_block(self.iconview, self.id_selection_changed_event):
-            sw_vadj.set_value(sw_vadj.get_value() + step)
-            if not self.click_path:
-                changed = self.iv_drag_select.motion(step=step)
-                if changed:
-                    self.iv_selection_changed_event()
-        return True  # call me again
-
-    def iv_motion(self, iconview, event):
-        """Manages mouse movement on the iconview."""
+    def iv_motion(self, gridview, event):
+        """Manages mouse movement on the gridview."""
         # Pan the view when pressing mouse wheel and moving mouse
         if event.state & Gdk.ModifierType.BUTTON2_MASK:
             self.iv_pan_view.motion(event)
 
         # Detect drag and drop events
         if self.pressed_button:
-            if iconview.drag_check_threshold(self.pressed_button.x,
+            if gridview.drag_check_threshold(self.pressed_button.x,
                                              self.pressed_button.y,
                                              event.x, event.y):
-                iconview.drag_begin_with_coordinates(Gtk.TargetList.new(self.TARGETS_IV),
+                gridview.drag_begin_with_coordinates(Gtk.TargetList.new(self.TARGETS_IV),
                                                      Gdk.DragAction.COPY | Gdk.DragAction.MOVE,
                                                      self.pressed_button.button, event, -1, -1)
                 self.pressed_button = None
@@ -2097,13 +2021,13 @@ class PdfArranger(Gtk.Application):
         if event.state & Gdk.ModifierType.BUTTON1_MASK and self.iv_drag_select.click_location:
             self.iv_autoscroll(event.x, event.y, autoscroll_area=4)
             if not self.click_path:
-                with GObject.signal_handler_block(iconview, self.id_selection_changed_event):
+                with GObject.signal_handler_block(gridview, self.id_selection_changed_event):
                     changed = self.iv_drag_select.motion(event)
                 if changed:
                     self.iv_selection_changed_event()
 
-    def iv_button_release_event(self, iconview, event):
-        """Manages mouse releases on the iconview"""
+    def iv_button_release_event(self, gridview, event):
+        """Manages mouse releases on the gridview"""
         if self.end_rubberbanding:
             self.end_rubberbanding = False
             return
@@ -2113,16 +2037,16 @@ class PdfArranger(Gtk.Application):
         if self.pressed_button:
             # Button was pressed and released on a previously selected item
             # without causing a drag and drop.
-            path = iconview.get_path_at_pos(event.x, event.y)
+            path = gridview.get_path_at_pos(event.x, event.y)
             if not path:
                 return
             if event.state & Gdk.ModifierType.CONTROL_MASK:
                 # Deselect the clicked item.
-                iconview.unselect_path(path)
+                gridview.unselect_path(path)
             else:
                 # Deselect everything except the clicked item.
-                iconview.unselect_all()
-                iconview.select_path(path)
+                gridview.unselect_all()
+                gridview.select_path(path)
         self.pressed_button = None
 
         # Stop drag-select autoscrolling when button is released
@@ -2130,8 +2054,8 @@ class PdfArranger(Gtk.Application):
             GObject.source_remove(self.iv_auto_scroll_timer)
             self.iv_auto_scroll_timer = None
 
-    def iv_button_press_event(self, iconview, event):
-        """Manages mouse clicks on the iconview"""
+    def iv_button_press_event(self, gridview, event):
+        """Manages mouse clicks on the gridview"""
         # Switch between zoom_fit and zoom_set on double-click
         if event.button == 1 and event.type == Gdk.EventType._2BUTTON_PRESS and self.click_path:
             self.pressed_button = None
@@ -2143,33 +2067,33 @@ class PdfArranger(Gtk.Application):
             self.iv_pan_view.click(event)
 
         click_path_old = self.click_path
-        self.click_path = iconview.get_path_at_pos(event.x, event.y)
+        self.click_path = gridview.get_path_at_pos(event.x, event.y)
 
         # On shift-click, select all items from cursor up to the shift-clicked item.
         # On shift-ctrl-click, toggle selection for single items.
-        # IconView's built-in multiple-selection mode performs rubber-band
+        # GridView's built-in multiple-selection mode performs rubber-band
         # (rectangular) selection, which is not what we want. We override
         # it by handling the shift-click here.
         if event.button == 1 and self.click_path and event.state & Gdk.ModifierType.SHIFT_MASK:
-            cursor_path = iconview.get_cursor()[1]
+            cursor_path = gridview.get_cursor()[1]
             if event.state & Gdk.ModifierType.CONTROL_MASK:
-                if iconview.path_is_selected(self.click_path):
-                    iconview.unselect_path(self.click_path)
+                if gridview.path_is_selected(self.click_path):
+                    gridview.unselect_path(self.click_path)
                 else:
-                    iconview.select_path(self.click_path)
+                    gridview.select_path(self.click_path)
             elif cursor_path:
                 i_cursor = cursor_path[0]
                 i_click = self.click_path[0]
                 i_click_old = click_path_old[0] if click_path_old else i_click
                 range_start = min(i_cursor, i_click, i_click_old)
                 range_end = max(i_cursor, i_click, i_click_old)
-                with GObject.signal_handler_block(iconview, self.id_selection_changed_event):
+                with GObject.signal_handler_block(gridview, self.id_selection_changed_event):
                     for i in range(range_start, range_end + 1):
                         path = Gtk.TreePath.new_from_indices([i])
                         if min(i_cursor, i_click) <= i <= max(i_cursor, i_click):
-                            iconview.select_path(path)
+                            gridview.select_path(path)
                         else:
-                            iconview.unselect_path(path)
+                            gridview.unselect_path(path)
                 self.iv_selection_changed_event()
             return Gdk.EVENT_STOP
 
@@ -2179,11 +2103,11 @@ class PdfArranger(Gtk.Application):
 
         # Do not deselect when clicking an already selected item for drag and drop
         if event.button == 1:
-            selection = iconview.get_selected_items()
+            selection = gridview.get_selected_items()
             if self.click_path and self.click_path in selection:
                 self.pressed_button = event
-                if iconview.get_cursor()[1] != self.click_path:
-                    self.iconview.set_cursor(self.click_path, None, False)
+                if gridview.get_cursor()[1] != self.click_path:
+                    self.gridview.set_cursor(self.click_path, None, False)
                 return Gdk.EVENT_STOP  # prevent propagation i.e. (de-)selection
 
         # Display right click menu
@@ -2191,13 +2115,13 @@ class PdfArranger(Gtk.Application):
             self.iv_drag_select.end()
             self.iv_pan_view.end()
             if self.click_path:
-                selection = iconview.get_selected_items()
+                selection = gridview.get_selected_items()
                 if self.click_path not in selection:
-                    iconview.unselect_all()
-                    iconview.select_path(self.click_path)
+                    gridview.unselect_all()
+                    gridview.select_path(self.click_path)
             else:
-                iconview.unselect_all()
-            iconview.grab_focus()
+                gridview.unselect_all()
+            gridview.grab_focus()
             self.popup.popup(None, None, None, None, event.button, event.time)
             return Gdk.EVENT_STOP
 
@@ -2208,23 +2132,23 @@ class PdfArranger(Gtk.Application):
             if event.state & Gdk.ModifierType.SHIFT_MASK:
                 return Gdk.EVENT_STOP  # Don't deselect all
 
-            # Let iconview hide cursor. Then stop rubberbanding with the release event
+            # Let gridview hide cursor. Then stop rubberbanding with the release event
             self.end_rubberbanding = True
             release_event = event.copy()
             release_event.type = Gdk.EventType.BUTTON_RELEASE
             release_event.put()
         return Gdk.EVENT_PROPAGATE
 
-    def iv_key_press_event(self, iconview, event):
-        """Manages keyboard press events on the iconview."""
+    def iv_key_press_event(self, gridview, event):
+        """Manages keyboard press events on the gridview."""
         if event.state & Gdk.ModifierType.BUTTON1_MASK:
             return Gdk.EVENT_STOP
         if event.keyval in [Gdk.KEY_Up, Gdk.KEY_Down, Gdk.KEY_Left, Gdk.KEY_Right,
                               Gdk.KEY_Home, Gdk.KEY_End, Gdk.KEY_Page_Up, Gdk.KEY_Page_Down,
                               Gdk.KEY_KP_Page_Up, Gdk.KEY_KP_Page_Down]:
             # Move cursor, select pages and scroll with navigation keys
-            with GObject.signal_handler_block(iconview, self.id_selection_changed_event):
-                self.iv_cursor.handler(iconview, event)
+            with GObject.signal_handler_block(gridview, self.id_selection_changed_event):
+                self.iv_cursor.handler(gridview, event)
             self.iv_selection_changed_event(None, move_cursor_event=True)
             return Gdk.EVENT_STOP
         if self.config.is_popup_key_event(event):
@@ -2232,8 +2156,9 @@ class PdfArranger(Gtk.Application):
             return Gdk.EVENT_STOP
         return Gdk.EVENT_PROPAGATE
 
-    def iv_selection_changed_event(self, _iconview=None, move_cursor_event=False):
-        selection = self.iconview.get_selected_items()
+    def iv_selection_changed_event(self, _gridview=None, move_cursor_event=False):
+        return
+        selection = self.gridview.get_selected_items()
         ne = len(selection) > 0
         for a, e in [
             ("reverse-order", self.reverse_order_available(selection)),
@@ -2263,6 +2188,7 @@ class PdfArranger(Gtk.Application):
     def window_focus_in_out_event(self, _widget=None, _event=None):
         """Keyboard focus enter or leave window."""
         # Enable or disable paste actions based on clipboard content
+        return
         text = self.clipboard.wait_is_text_available()
         image = len(img2pdf_supported_img) > 0 and self.clipboard.wait_is_image_available()
         if self.window.lookup_action("paste"):  # Prevent error when closing with Alt+F4
@@ -2274,12 +2200,12 @@ class PdfArranger(Gtk.Application):
         """Handles received data by drag and drop in scrolledwindow"""
         if target_id == self.TEXT_URI_LIST:
             pageadder = PageAdder(self)
-            model = self.iconview.get_model()
+            model = self.gridview.get_model()
             ref_to = Gtk.TreeRowReference.new(model, self.drag_path) if len(model) > 0 else None
-            if self.iconview.get_direction() == Gtk.TextDirection.LTR:
-                before = self.drag_pos == Gtk.IconViewDropPosition.DROP_LEFT
+            if self.gridview.get_direction() == Gtk.TextDirection.LTR:
+                before = self.drag_pos == Gtk.gridview.DROP_LEFT
             else:
-                before = self.drag_pos == Gtk.IconViewDropPosition.DROP_RIGHT
+                before = self.drag_pos == Gtk.gridview.DROP_RIGHT
             pageadder.move(ref_to, before)
             for uri in selection_data.get_uris():
                 filename = get_file_path_from_uri(uri)
@@ -2288,39 +2214,38 @@ class PdfArranger(Gtk.Application):
             self.iv_selection_changed_event()
 
     def sw_button_press_event(self, _scrolledwindow, event):
-        """Unselects all items in iconview on mouse click in scrolledwindow"""
+        """Unselects all items in gridview on mouse click in scrolledwindow"""
         # TODO most likely unreachable code
 
         if event.button == 1:
-            self.iconview.unselect_all()
+            self.gridview.unselect_all()
 
-    def sw_scroll_event(self, _scrolledwindow, event):
+    def sw_scroll_event(self, event_controller, dx, dy):
         """Manages mouse scroll events in scrolledwindow"""
-        if event.state & Gdk.ModifierType.SHIFT_MASK:
+        event = event_controller.get_current_event()
+        state = event.get_modifier_state()
+
+        if state & Gdk.ModifierType.SHIFT_MASK:
             # Scroll horizontally
             return Gdk.EVENT_PROPAGATE
-        if event.direction == Gdk.ScrollDirection.SMOOTH:
-            dy = event.get_scroll_deltas()[2]
-        elif event.direction == Gdk.ScrollDirection.UP:
-            dy = -1
-        elif event.direction == Gdk.ScrollDirection.DOWN:
-            dy = 1
-        else:
-            return Gdk.EVENT_PROPAGATE
-        if event.state & Gdk.ModifierType.CONTROL_MASK:
-            # Zoom
-            self.zoom_set(self.zoom_level - dy)
-        else:
-            # Scroll. Also drag-select if mouse button is pressed
-            sw_vadj = self.sw.get_vadjustment()
-            step = max(20, sw_vadj.get_step_increment()) * dy
-            with GObject.signal_handler_block(self.iconview, self.id_selection_changed_event):
-                sw_vadj.set_value(sw_vadj.get_value() + step)
-                if event.state & Gdk.ModifierType.BUTTON1_MASK:
-                    changed = self.iv_drag_select.motion(event, step=step)
-                    if changed:
-                        self.iv_selection_changed_event()
+
+        self.accumulated_y_step += dy
+        if not self.delayed_scroll:
+            self.delayed_scroll = GObject.timeout_add(10, self.sw_scroll_delayed, state)
         return Gdk.EVENT_STOP
+
+    def sw_scroll_delayed(self, state):
+        """Scroll no more than every 10ms to improve performance"""
+        if state & Gdk.ModifierType.CONTROL_MASK:
+            # Zoom
+            self.zoom_set(self.zoom_level - self.accumulated_y_step)
+        else:
+            # Scroll
+            sw_vadj = self.sw.get_vadjustment()
+            step = max(20, sw_vadj.get_step_increment()) * self.accumulated_y_step
+            sw_vadj.set_value(sw_vadj.get_value() + step)
+        self.accumulated_y_step = 0
+        self.delayed_scroll = None
 
     def enable_zoom_buttons(self, out_enable, in_enable):
         if self.window.lookup_action("zoom-out"):
@@ -2332,7 +2257,8 @@ class PdfArranger(Gtk.Application):
         if len(self.model) == 0:
             return
         max_pixels = 6000000  # 6000000 pixels * 4 byte/pixel -> 23Mb
-        max_page_size = max(p.width_in_points() * p.height_in_points() for p, _ in self.model)
+        #max_page_size = max(p.width_in_points() * p.height_in_points() for p, _ in self.model)
+        max_page_size = max(p.width_in_points() * p.height_in_points() for p in self.model)
         max_zoom_scale = (max_pixels / max_page_size) ** .5
         self.zoom_level_limits[1] = min(int(log(max_zoom_scale / .2) / log(1.1)), 80)
         self.zoom_set(self.zoom_level)
@@ -2347,20 +2273,50 @@ class PdfArranger(Gtk.Application):
         if zoom_scale == self.zoom_scale:
             return
         self.zoom_scale = zoom_scale
-        self.vadj_percent_handler(store=True)
-        if self.id_scroll_to_sel:
-            GObject.source_remove(self.id_scroll_to_sel)
+        #if self.id_scroll_to_sel:
+        #    GObject.source_remove(self.id_scroll_to_sel)
         self.zoom_fit_page = False
         self.quit_rendering()  # For performance reasons
-        for row in self.model:
-            row[0].zoom = self.zoom_scale
+        for page in self.model:
+            page.zoom = self.zoom_scale
         if len(self.model) > 0:
-            self.update_iconview_geometry()
-            self.model[0][0] = self.model[0][0]  # Let iconview refresh itself
+            self.gridview.update_geometry()
+            #self.model[0][0] = self.model[0][0]  # Let gridview refresh itself
             self.id_scroll_to_sel = GObject.timeout_add(400, self.scroll_to_selection, False)
             self.silent_render()
 
-    def zoom_fit(self, path):
+    def zoom_fit(self, num):
+        """Zoom and scroll to path."""
+        sw_width = self.sw.get_allocated_width()
+        sw_height = self.sw.get_allocated_height()
+        page_width = self.model[num].width_in_points()
+        page_height = self.model[num].height_in_points()
+
+        margins = 12  # leave 6 pixel at left and 6 pixel at right
+        cell_extraX = 24
+        cell_extraY = 34
+
+        zoom_scaleX_new = max(1, (sw_width - cell_extraX - margins)) / page_width
+        zoom_scaleY_new = max(1, (sw_height - cell_extraY)) / page_height
+        zoom_scale = min(zoom_scaleY_new, zoom_scaleX_new)
+
+        lower, upper = self.zoom_level_limits
+        self.zoom_level = min(max(int(log(zoom_scale / .2) / log(1.1)), lower), upper)
+        if self.zoom_level in [lower, upper]:
+            zoom_scale = 0.2 * (1.1 ** self.zoom_level)
+        self.zoom_scale = zoom_scale
+        self.enable_zoom_buttons(self.zoom_level != lower, self.zoom_level != upper)
+        for page in self.model:
+            page.zoom = self.zoom_scale
+        #self.model[0][0] = self.model[0][0]
+        self.gridview.update_geometry()
+        #self.gridview.scroll_to_path(path, True, 0.5, 0.5)
+        #GObject.idle_add(self.scroll_to_num, 0)
+        GObject.idle_add(self.gridview.scroll_to_num, num)
+        #self.gridview.scroll_to(num, Gtk.ListScrollFlags.FOCUS, None)
+        #self.gridview.scroll_to(num, Gtk.ListScrollFlags.SELECT, None)
+
+    def zoom_fit_old(self, path):
         """Zoom and scroll to path."""
         item_padding = self.iconview.get_item_padding()
         cell_image_renderer, cell_text_renderer = self.iconview.get_cells()
@@ -2388,7 +2344,7 @@ class PdfArranger(Gtk.Application):
         for page, _ in self.model:
             page.zoom = self.zoom_scale
         self.model[0][0] = self.model[0][0]
-        self.update_iconview_geometry()
+        self.update_geometry()
         self.iconview.scroll_to_path(path, True, 0.5, 0.5)
 
     def on_action_zoom_in(self, _action, _param, _unknown):
@@ -2404,17 +2360,24 @@ class PdfArranger(Gtk.Application):
         if self.zoom_fit_page:
             self.zoom_set(self.zoom_level_old)
         else:
-            self.vadj_percent_handler(store=True)
-            selection = self.iconview.get_selected_items()
-            if len(selection) > 0:
-                path = selection[-1]
+            selection = self.gridview.multi_selection.get_selection()
+            nitems = selection.get_size()
+            if nitems > 0:
+                item_num = selection.get_nth(0)
             else:
-                path = Gtk.TreePath.new_from_indices([self.get_visible_range2()[0]])
-                self.iconview.select_path(path)
-            self.iconview.set_cursor(path, None, False)
+                self.gridview.set_select(item_num)
+
+
+            #selection = self.gridview.get_selected_items()
+            #if len(selection) > 0:
+            #    path = selection[-1]
+            #else:
+            #    path = Gtk.TreePath.new_from_indices([self.get_visible_range()[0]])
+            #    self.gridview.select_path(path)
+            #self.gridview.set_cursor(path, None, False)
             self.zoom_level_old = self.zoom_level
             self.zoom_fit_page = True
-            self.zoom_fit(path)
+            self.zoom_fit(item_num)
 
     def on_action_fullscreen(self, _action, _param, _unknown):
         """Toggle fullscreen mode."""
@@ -2427,36 +2390,48 @@ class PdfArranger(Gtk.Application):
             header_bar.show()
 
     def scroll_to_selection(self, center=True):
-        """Scroll iconview so that selection is in center of window."""
+        return
+        """Scroll gridview so that selection is in center of window."""
         self.id_scroll_to_sel = None
-        selection = self.iconview.get_selected_items()
+        selection = self.gridview.get_selected_items()
         if len(selection) > 0:
             path = selection[len(selection) // 2]
-            self.iconview.scroll_to_path(path, center, 0.5, 0.5)
+            self.gridview.scroll_to_path(path, center, 0.5, 0.5)
 
     def rotate_page_action(self, _action, angle, _unknown):
-        """Rotates the selected page in the IconView"""
+        """Rotates the selected page in the GridView"""
         self.undomanager.commit("Rotate")
         angle = angle.get_int32()
-        selection = self.iconview.get_selected_items()
+        selection = self.gridview.get_selected_items()
         if self.rotate_page(selection, angle):
             self.set_unsaved(True)
             self.update_statusbar()
 
     def rotate_page(self, selection, angle):
-        model = self.iconview.get_model()
+        model = self.gridview.get_model()
+        if len(model) == 0:
+            return
         rotated = False
-        page_width_old = max(p.width_in_points() for p, _ in self.model)
-        page_height_old = max(p.height_in_points() for p, _ in self.model)
-        for path in selection:
-            treeiter = model.get_iter(path)
-            p = model.get_value(treeiter, 0)
-            if p.rotate(angle):
-                rotated = True
-                model.set_value(treeiter, 0, p)
-        self.update_iconview_geometry()
-        page_width_new = max(p.width_in_points() for p, _ in self.model)
-        page_height_new = max(p.height_in_points() for p, _ in self.model)
+        page_width_old = max(p.width_in_points() for p in self.model)
+        page_height_old = max(p.height_in_points() for p in self.model)
+
+        nitems = selection.get_size()
+        for num in range(nitems):
+            item_num = selection.get_nth(num)
+            page = self.model[item_num]
+            page.rotate(angle)
+        #     treeiter = model.get_iter(path)
+        #     p = model.get_value(treeiter, 0)
+        #     if p.rotate(angle):
+        #         rotated = True
+        #         model.set_value(treeiter, 0, p)
+
+        #page = selection
+        #page.rotate(angle)
+
+        self.gridview.update_geometry()
+        page_width_new = max(p.width_in_points() for p in self.model)
+        page_height_new = max(p.height_in_points() for p in self.model)
         if page_width_old != page_width_new or page_height_old != page_height_new:
             self.scroll_to_selection()
         return rotated
@@ -2467,11 +2442,11 @@ class PdfArranger(Gtk.Application):
         leftcrops, topcrops = diag.run_get()
         if leftcrops is None or topcrops is None:
             return
-        model = self.iconview.get_model()
+        model = self.gridview.get_model()
         self.set_unsaved(True)
         self.undomanager.commit("Split")
         # selection is a list of 1-tuples, not in order
-        selection = self.iconview.get_selected_items()
+        selection = self.gridview.get_selected_items()
         selection.sort(key=lambda x: x.get_indices()[0])
         ref_list = [Gtk.TreeRowReference.new(model, path)
                     for path in selection]
@@ -2485,7 +2460,7 @@ class PdfArranger(Gtk.Application):
                     p.resample = -1
                     model.insert_after(iterator, [p, p.description()])
                 model.set_value(iterator, 0, page)
-        self.update_iconview_geometry()
+        self.update_geometry()
         self.iv_selection_changed_event()
         self.update_max_zoom_level()
         GObject.idle_add(self.render)
@@ -2501,7 +2476,7 @@ class PdfArranger(Gtk.Application):
 
     def merge_pages(self, _action, _parameter, _unknown):
         """Merge selected pages."""
-        selection = self.iconview.get_selected_items()
+        selection = self.gridview.get_selected_items()
         if not self.is_paste_layer_available(selection):
             return
         data = self.copy_pages(add_hash=False)
@@ -2514,7 +2489,7 @@ class PdfArranger(Gtk.Application):
         self.undomanager.commit("Merge")
         self.set_unsaved(True)
         self.clear_selected()
-        self.iconview.unselect_all()
+        self.gridview.unselect_all()
 
         ndpage = selection[-1].get_indices()[0]
         before = ndpage < len(self.model)
@@ -2528,7 +2503,7 @@ class PdfArranger(Gtk.Application):
             return
         adder.move(ref, before)
         adder.addpages(file)
-        with GObject.signal_handler_block(self.iconview, self.id_selection_changed_event):
+        with GObject.signal_handler_block(self.gridview, self.id_selection_changed_event):
             adder.commit(select_added=True, add_to_undomanager=False)
 
         nlpage = 0
@@ -2547,7 +2522,7 @@ class PdfArranger(Gtk.Application):
                 if nlpage > len(data) - 1:
                     break
             ndpage += 1
-        self.update_iconview_geometry()
+        self.update_geometry()
         self.iv_selection_changed_event()
         self.update_max_zoom_level()
 
@@ -2558,8 +2533,8 @@ class PdfArranger(Gtk.Application):
 
     def page_size_dialog(self, _action, _parameter, _unknown):
         """Opens a dialog box to define page size."""
-        selection = self.iconview.get_selected_items()
-        diag = pageutils.ScaleDialog(self.iconview.get_model(), selection, self.window)
+        selection = self.gridview.get_selected_items()
+        diag = pageutils.ScaleDialog(self.gridview.get_model(), selection, self.window)
         newscale = diag.run_get()
         if newscale is None:
             return
@@ -2568,13 +2543,13 @@ class PdfArranger(Gtk.Application):
             return
         self.set_unsaved(True)
         self.update_statusbar()
-        self.update_iconview_geometry()
+        self.update_geometry()
         self.update_max_zoom_level()
         GObject.idle_add(self.render)
 
     def crop_dialog(self, _action, _parameter, _unknown):
         """Opens a dialog box to define margins for page cropping."""
-        s = self.iconview.get_selected_items()
+        s = self.gridview.get_selected_items()
         a = self.window, s, self.model, self.pdfqueue, self.is_unsaved, 'CROP', self.update_crop
         pageutils.CropHideDialog(*a)
 
@@ -2583,20 +2558,20 @@ class PdfArranger(Gtk.Application):
         self.crop(selection, crops)
         self.set_unsaved(is_unsaved)
         self.update_statusbar()
-        self.update_iconview_geometry()
+        self.update_geometry()
         self.update_max_zoom_level()
         GObject.idle_add(self.render)
 
     def hide_dialog(self, _action, _parameter, _unknown):
         """Opens a dialog box to define margins for page hiding."""
-        s = self.iconview.get_selected_items()
+        s = self.gridview.get_selected_items()
         if not self.is_paste_layer_available(s):
             return
         a = self.window, s, self.model, self.pdfqueue, self.is_unsaved, 'HIDE', self.update_hide
         pageutils.CropHideDialog(*a)
 
     def update_hide(self, hide, selection, is_unsaved):
-        """Step 1 in update hide. This make hiding work in iconview.
+        """Step 1 in update hide. This make hiding work in gridview.
 
         Step 2 does the 'real' hiding. This is done with:
         apply_hide_margins_on_pages() (at export and generate_booklet).
@@ -2609,7 +2584,7 @@ class PdfArranger(Gtk.Application):
             page.resample = -1
         self.set_unsaved(is_unsaved)
         self.update_statusbar()
-        self.update_iconview_geometry()
+        self.update_geometry()
         self.update_max_zoom_level()
         GObject.idle_add(self.render)
 
@@ -2667,8 +2642,8 @@ class PdfArranger(Gtk.Application):
             layerpages.pop(num)
 
     def crop_white_borders(self, _action, _parameter, _unknown):
-        selection = self.iconview.get_selected_items()
-        crop = pageutils.white_borders(self.iconview.get_model(), selection, self.pdfqueue)
+        selection = self.gridview.get_selected_items()
+        crop = pageutils.white_borders(self.gridview.get_model(), selection, self.pdfqueue)
         self.undomanager.commit("Crop white Borders")
         if self.crop(selection, crop):
             self.set_unsaved(True)
@@ -2678,7 +2653,7 @@ class PdfArranger(Gtk.Application):
 
     def crop(self, selection, newcrop):
         changed = False
-        model = self.iconview.get_model()
+        model = self.gridview.get_model()
         for id_sel, path in enumerate(selection):
             pos = model.get_iter(path)
             page = model.get_value(pos, 0)
@@ -2687,7 +2662,7 @@ class PdfArranger(Gtk.Application):
                 page.resample = -1
                 changed = True
             model.set_value(pos, 0, page)
-        self.update_iconview_geometry()
+        self.update_geometry()
         return changed
 
     def duplicate(self, _action, _parameter, _unknown):
@@ -2696,9 +2671,9 @@ class PdfArranger(Gtk.Application):
         self.set_unsaved(True)
         self.undomanager.commit("Duplicate")
 
-        model = self.iconview.get_model()
+        model = self.gridview.get_model()
         # selection is a list of 1-tuples, not in order
-        selection = self.iconview.get_selected_items()
+        selection = self.gridview.get_selected_items()
         selection.sort(key=lambda x: x.get_indices()[0])
         ref_list = [Gtk.TreeRowReference.new(model, path)
                     for path in selection]
@@ -2729,10 +2704,10 @@ class PdfArranger(Gtk.Application):
         return contiguous
 
     def reverse_order(self, _action, _parameter, _unknown):
-        """Reverses the selected elements in the IconView"""
+        """Reverses the selected elements in the GridView"""
 
-        model = self.iconview.get_model()
-        selection = self.iconview.get_selected_items()
+        model = self.gridview.get_model()
+        selection = self.gridview.get_selected_items()
 
         # selection is a list of 1-tuples, not in order
         indices = sorted([i[0] for i in selection])
@@ -2809,7 +2784,8 @@ class PdfArranger(Gtk.Application):
         about_dialog.show_all()
 
     def update_statusbar(self):
-        selection = self.iconview.get_selected_items()
+        return
+        selection = self.gridview.get_selected_items()
         selected_pages = sorted([p.get_indices()[0] + 1 for p in selection])
         # Compact the representation of the selected page range
         jumps = [[l, r] for l, r in zip(selected_pages, selected_pages[1:])
@@ -2823,7 +2799,7 @@ class PdfArranger(Gtk.Application):
         num_pages = len(self.model)
         msg = _("Selected pages: ") + ", ".join(display) + " / " + str(num_pages)
         if len(selection) == 1:
-            model = self.iconview.get_model()
+            model = self.gridview.get_model()
             pagesize = model[selection[0]][0].size_in_points()
             pagesize = [x * 25.4 / 72 for x in pagesize]
             msg += " | "+_("Page Size:")+ " {:.1f}mm \u00D7 {:.1f}mm".format(*pagesize)
