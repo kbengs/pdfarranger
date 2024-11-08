@@ -672,6 +672,23 @@ class PdfArranger(Gtk.Application):
                 if os.name != 'nt':
                     f.add_mime_type('application/pdf')
             filter_list.append(f_pdf)
+        if 'png' in file_type_list:
+            f_png = Gtk.FileFilter()
+            f_png.set_name(_('PNG images'))
+            for f in [f_png, f_supported]:
+                f.add_pattern('*.png')
+                if os.name != 'nt':
+                    f.add_mime_type('image/png')
+            filter_list.append(f_png)
+        if 'jpeg' in file_type_list:
+            f_jpeg = Gtk.FileFilter()
+            f_jpeg.set_name(_('JPEG images'))
+            for f in [f_jpeg, f_supported]:
+                f.add_pattern('*.jpeg')
+                f.add_pattern('*.jpg')
+                if os.name != 'nt':
+                    f.add_mime_type('image/jpeg')
+            filter_list.append(f_jpeg)
         if 'all' in file_type_list:
             f = Gtk.FileFilter()
             f.set_name(_('All files'))
@@ -1446,7 +1463,7 @@ class PdfArranger(Gtk.Application):
         files = [(pdf.copyname, pdf.password) for pdf in self.pdfqueue]
         export_msg = multiprocessing.Queue()
         args = files, pages, self.metadata, files_out, self.quit_flag, self.config
-        if exportmode in ['SELECTED_TO_PNG', 'SELECTED_TO_JPG']:
+        if exportmode in ['SELECTED_TO_PNG', 'SELECTED_TO_JPG', 'SELECTED_TO_PDF_PNG', 'SELECTED_TO_PDF_JPG']:
             args += self.pdfqueue, exportmode, export_msg
             self.export_process = ImageExporter(*args)
         else:
@@ -1532,8 +1549,15 @@ class PdfArranger(Gtk.Application):
                        2: 'SELECTED_TO_SINGLE',
                        3: 'SELECTED_TO_MULTIPLE',
                        4: 'SELECTED_TO_PNG',
-                       5: 'SELECTED_TO_JPG'}
+                       5: 'SELECTED_TO_JPG',
+                       6: 'SELECTED_TO_PDF_PNG',
+                       7: 'SELECTED_TO_PDF_JPG'}
         exportmode = exportmodes[mode.get_int32()]
+        img2pdf_needed = exportmode in ['SELECTED_TO_PDF_PNG', 'SELECTED_TO_PDF_JPG']
+        if img2pdf_needed and len(img2pdf_supported_img) == 0:
+            msg = _("Img2pdf missing.")
+            self.error_message_dialog(msg)
+            return
         self.choose_export_pdf_name(exportmode)
 
     def on_action_export_all(self, _action, _param, _unknown):

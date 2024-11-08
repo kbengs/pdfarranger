@@ -470,10 +470,11 @@ class PasswordDialog(Gtk.Dialog):
             raise _UnknownPasswordException()
 
 
-def _img_to_pdf(images, tmp_dir):
+def _img_to_pdf(images, tmp_dir=None, dpi=None, pdf_file_name=None):
     """Wrap img2pdf.convert to handle some corner cases"""
-    fd, pdf_file_name = tempfile.mkstemp(suffix=".pdf", dir=tmp_dir)
-    os.close(fd)
+    if pdf_file_name is None:
+        fd, pdf_file_name = tempfile.mkstemp(suffix=".pdf", dir=tmp_dir)
+        os.close(fd)
     try:
         # Try to handle invalid EXIF rotation
         rot = img2pdf.Rotation.ifvalid
@@ -499,8 +500,11 @@ def _img_to_pdf(images, tmp_dir):
                     bg.save(imgio, "PNG")
                     imgio.seek(0)
                     images[num] = imgio
+        kwargs = dict(rotation=rot)
+        if dpi is not None:
+            kwargs['layout_fun'] = img2pdf.get_fixed_dpi_layout_fun((dpi, dpi))
         try:
-            pdf = img2pdf.convert(images, rotation=rot)
+            pdf = img2pdf.convert(images, **kwargs)
         except ValueError as e:
             # Too small or large image
             raise PDFDocError(e)

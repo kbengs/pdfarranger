@@ -41,6 +41,7 @@ class ImageExporter:
         self.exportmode = exportmode
         self.export_msg = export_msg
         self.rendering_thread = None
+        self.imgbufs = []
         self.all_done = False
 
     def start(self):
@@ -63,6 +64,8 @@ class ImageExporter:
             return
         if thumbnail is None:
             # Rendering has ended
+            if self.exportmode in ['SELECTED_TO_PDF_PNG', 'SELECTED_TO_PDF_JPG']:
+                self.write_to_pdf()
             self.all_done = True
             return
         path = ref.get_path()
@@ -89,6 +92,8 @@ class ImageExporter:
         pixbuf = Gdk.pixbuf_get_from_surface(surface, 0, 0, w1, h1)
         if self.exportmode in ['SELECTED_TO_PNG', 'SELECTED_TO_JPG']:
             self.write_to_image(path, pixbuf)
+        else:
+            self.write_to_buffer(pixbuf)
 
     def write_to_image(self, path, pixbuf):
         ind = Gtk.TreePath.get_indices(path)[0]
@@ -97,6 +102,23 @@ class ImageExporter:
         success = pixbuf.savev(filename=filename, type=ext)
         if not success:
             self.exception_handler()
+
+    def write_to_buffer(self, pixbuf):
+        ext = 'png' if self.exportmode == 'SELECTED_TO_PDF_PNG' else 'jpeg'
+        success, imgbuf = pixbuf.save_to_bufferv(ext)
+        if not success:
+            self.exception_handler()
+            return
+        self.imgbufs.append(imgbuf)
+
+    def write_to_pdf(self):
+        if len(self.imgbufs) == 0:
+            return
+        _img_to_pdf(self.imgbufs, dpi=self.dpi, pdf_file_name=self.files_out[0])
+        with pikepdf.open(self.files_out[0], allow_overwriting_input=True) as pdf:
+            m = merge(self.metadata, self.files)
+            _set_meta(m, [], pdf)
+            pdf.save()
 
     def exception_handler(self):
         self.export_msg.put(["Exporting failed", Gtk.MessageType.ERROR])
