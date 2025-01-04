@@ -919,6 +919,7 @@ class TestBatch9(PdfArrangerTest):
         self.assertIn("libqpdf", stdout)
         self.assertIn("OS-", stdout)
         self.assertIn("OS_Version-", stdout)
+        print(stdout)
 
 
 class TestBatch10(PdfArrangerTest):

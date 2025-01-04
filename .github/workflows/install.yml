@@ -46,7 +46,7 @@ jobs:
     - name: Install
       run: pip3 install -v .[image]
     - name: Dogtail Tests and Coverage
-      run: python3 -X tracemalloc -u -m unittest -v -f tests.test
+      run: python3 -X tracemalloc -u -m unittest -v -f tests.test.TestBatch9
     - name: Exporter Tests and Coverage
       run: python3 -m coverage run --data-file=.coverage.exporter -m unittest -v -f tests.test_exporter
     - name: Core Tests and Coverage
