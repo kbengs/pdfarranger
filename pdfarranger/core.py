@@ -470,10 +470,13 @@ class PasswordDialog(Gtk.Dialog):
             raise _UnknownPasswordException()
 
 
-def _img_to_pdf(images, tmp_dir):
+def _img_to_pdf(images, tmp_dir, page_size=None):
     """Wrap img2pdf.convert to handle some corner cases"""
     if version.parse(img2pdf.__version__) < version.Version('0.4.2'):
         for num, image in enumerate(images):
+            if isinstance(image, img2pdf.BytesIO):
+                # Images from ImageExporter does not have transparency
+                continue
             if isinstance(image, str):
                 img = img2pdf.Image.open(image)
             else:
@@ -496,15 +499,22 @@ def _img_to_pdf(images, tmp_dir):
     except AttributeError:
         # img2pdf is too old so we can't support invalid EXIF rotation
         rot = None
+    kwargs = dict(rotation=rot)
+    if page_size is not None:
+        kwargs['layout_fun'] = img2pdf.get_layout_fun(page_size)
     try:
-        pdf = img2pdf.convert(images, rotation=rot)
+        pdf = img2pdf.convert(images, **kwargs)
     except ValueError as e:
         # Too small or large image
         raise PDFDocError(e)
-    fd, pdf_file = tempfile.mkstemp(suffix=".pdf", dir=tmp_dir)
-    os.close(fd)
-    with open(pdf_file, "wb") as f:
-        f.write(pdf)
+    if tmp_dir is None:
+        pdf_file = img2pdf.BytesIO()
+        pdf_file.write(pdf)
+    else:
+        fd, pdf_file = tempfile.mkstemp(suffix=".pdf", dir=tmp_dir)
+        os.close(fd)
+        with open(pdf_file, "wb") as f:
+            f.write(pdf)
     return pdf_file
 
 
