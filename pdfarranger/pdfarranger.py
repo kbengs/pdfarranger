@@ -169,6 +169,7 @@ from . import exporter
 from . import metadata
 from . import pageutils
 from . import splitter
+from .image_exporter import ImageExporter
 from .iconview import CellRendererImage, IconviewCursor, IconviewDragSelect, IconviewPanView
 from .core import img2pdf_supported_img, PageAdder, PDFDocError, PDFRenderer
 GObject.type_register(CellRendererImage)
@@ -1267,8 +1268,6 @@ class PdfArranger(Gtk.Application):
     def get_cnt_filename(f, need_cnt=False):
         """Get a filename where the value at end is incremented by 1."""
         shortname, ext = os.path.splitext(f)
-        if ext.lower() != ".pdf":
-            ext = ".pdf"
         cnt = ""
         for char in reversed(shortname):
             if char.isdigit():
@@ -1301,14 +1300,26 @@ class PdfArranger(Gtk.Application):
                 if f.endswith(".pdf") and not tempdir:
                     chooser.set_filename(f)  # Set name to existing file
             else:
-                shortname, ext = os.path.splitext(basename)
+                shortname, _ext = os.path.splitext(basename)
                 if self.export_file is None and tempdir:
                     shortname = ""
-                f = self.export_file or shortname + "-000" + ext
+                f = self.export_file or shortname + "-000"
+                if exportmode == 'SELECTED_TO_PNG':
+                    ext = '.png'
+                elif exportmode == 'SELECTED_TO_JPG':
+                    ext = '.jpg'
+                else:
+                    ext = '.pdf'
+                f += ext
                 f = self.get_cnt_filename(f)
                 chooser.set_current_name(f)  # Set name to new file
                 chooser.set_current_folder(self.export_directory)
-        filter_list = self.__create_filters(['pdf', 'all'])
+        if exportmode == 'SELECTED_TO_PNG':
+            filter_list = self.__create_filters(['png', 'all'])
+        elif exportmode == 'SELECTED_TO_JPG':
+            filter_list = self.__create_filters(['jpg', 'jpeg', 'all'])
+        else:
+            filter_list = self.__create_filters(['pdf', 'all'])
         for f in filter_list[1:]:
             chooser.add_filter(f)
 
@@ -1317,11 +1328,14 @@ class PdfArranger(Gtk.Application):
         chooser.destroy()
         if response == Gtk.ResponseType.ACCEPT:
             root, ext = os.path.splitext(file_out)
-            if ext.lower() != '.pdf':
-                ext = '.pdf'
-                file_out = file_out + ext
+            if exportmode == 'SELECTED_TO_PNG' and ext.lower() != '.png':
+                file_out += '.png'
+            elif exportmode == 'SELECTED_TO_JPG' and ext.lower() not in ['.jpg', '.jpeg']:
+                file_out += '.jpg'
+            elif exportmode not in ['SELECTED_TO_PNG', 'SELECTED_TO_JPG'] and ext.lower() != '.pdf':
+                file_out += '.pdf'
             files_out = [file_out]
-            if exportmode in ['ALL_TO_MULTIPLE', 'SELECTED_TO_MULTIPLE']:
+            if exportmode in ['ALL_TO_MULTIPLE', 'SELECTED_TO_MULTIPLE', 'SELECTED_TO_PNG', 'SELECTED_TO_JPG']:
                 s = self.iconview.get_selected_items()
                 len_files = len(self.model) if exportmode == 'ALL_TO_MULTIPLE' else len(s)
                 for i in range(1, len_files):
@@ -1414,25 +1428,31 @@ class PdfArranger(Gtk.Application):
 
     def save(self, exportmode, files_out):
         """Saves to the specified file."""
-        if exportmode in ['SELECTED_TO_SINGLE', 'SELECTED_TO_MULTIPLE']:
+        if exportmode in ['ALL_TO_SINGLE', 'ALL_TO_MULTIPLE']:
+            pages = [row[0].duplicate(incl_thumbnail=False) for row in self.model]
+        else:
             selection = reversed(self.iconview.get_selected_items())
             pages = [self.model[row][0].duplicate(incl_thumbnail=False) for row in selection]
-        else:
-            pages = [row[0].duplicate(incl_thumbnail=False) for row in self.model]
 
         self.apply_hide_margins_on_pages(pages)
 
         if exportmode == 'ALL_TO_SINGLE':
             self.set_save_file(files_out[0])
         else:
-            self.export_file = os.path.split(files_out[-1])[1]
+            last = os.path.split(files_out[-1])[1]
+            self.export_file = os.path.splitext(last)[0]
         self.export_directory = os.path.split(files_out[0])[0]
 
         files = [(pdf.copyname, pdf.password) for pdf in self.pdfqueue]
         export_msg = multiprocessing.Queue()
         args = files, pages, self.metadata, files_out, self.quit_flag, self.config
-        kwargs = dict(export_msg=export_msg)
-        self.export_process = multiprocessing.Process(target=exporter.export_process, args=args, kwargs=kwargs)
+        if exportmode in ['SELECTED_TO_PNG', 'SELECTED_TO_JPG']:
+            args += self.pdfqueue, exportmode, export_msg
+            self.export_process = ImageExporter(*args)
+        else:
+            kwargs = dict(export_msg=export_msg)
+            self.export_process = multiprocessing.Process(target=exporter.export_process,
+                                                          args=args, kwargs=kwargs)
         self.export_process.start()
         GObject.timeout_add(300, self.export_finished, exportmode, export_msg)
         self.set_export_state(True)
@@ -1510,7 +1530,9 @@ class PdfArranger(Gtk.Application):
         exportmodes = {0: 'ALL_TO_SINGLE',
                        1: 'ALL_TO_MULTIPLE',
                        2: 'SELECTED_TO_SINGLE',
-                       3: 'SELECTED_TO_MULTIPLE'}
+                       3: 'SELECTED_TO_MULTIPLE',
+                       4: 'SELECTED_TO_PNG',
+                       5: 'SELECTED_TO_JPG'}
         exportmode = exportmodes[mode.get_int32()]
         self.choose_export_pdf_name(exportmode)
 
