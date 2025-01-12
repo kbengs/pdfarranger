@@ -206,6 +206,12 @@ class Config(object):
     def set_auto_rotate(self, enabled):
         self.data.set('print-settings', 'auto-rotate', str(enabled))
 
+    def image_dpi(self):
+        return self.data.getint('preferences', 'image-dpi', fallback=150)
+
+    def set_image_dpi(self, dpi):
+        self.data.set('preferences', 'image-dpi', str(dpi))
+
     def save(self):
         conffile = Config._config_file(self.domain)
         os.makedirs(os.path.dirname(conffile), exist_ok=True)
@@ -284,11 +290,21 @@ class Config(object):
         else:
             # prevent CodeQL false positive "uninitialized local variable"
             cb_retain = None
-        t = _("For more options see:")
-        frame5 = Gtk.Frame(label=t, shadow_type=Gtk.ShadowType.NONE, margin=8)
-        label5 = Gtk.Label(self._config_file(self.domain), selectable=True, margin=8)
-        frame5.add(label5)
+        frame5 = Gtk.Frame(label=_("Image Export"), margin=8)
+        grid5 = Gtk.Grid(row_spacing=6, column_spacing=12, border_width=12)
+        label5 = Gtk.Label(_("DPI:"))
+        grid5.attach(label5, 0, 1, 1, 1)
+        image_dpi_sp = Gtk.SpinButton.new_with_range(1, 1200, 1)
+        image_dpi_sp.props.width_chars = 8
+        image_dpi_sp.set_value(self.image_dpi())
+        grid5.attach(image_dpi_sp, 1, 1, 1, 1)
+        frame5.add(grid5)
         d.vbox.pack_start(frame5, False, False, 8)
+        t = _("For more options see:")
+        frame6 = Gtk.Frame(label=t, shadow_type=Gtk.ShadowType.NONE, margin=8)
+        label6 = Gtk.Label(self._config_file(self.domain), selectable=True, margin=8)
+        frame6.add(label6)
+        d.vbox.pack_start(frame6, False, False, 8)
 
         langs = []
         if os.path.isdir(localedir):
@@ -326,4 +342,5 @@ class Config(object):
                 self.set_start_with_empty(not cb_retain.get_active())
             self.set_scale_mode(psettings.get_scale_mode())
             self.set_auto_rotate(psettings.get_auto_rotate())
+            self.set_image_dpi(image_dpi_sp.get_value_as_int())
         d.destroy()
