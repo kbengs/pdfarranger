@@ -1084,3 +1084,32 @@ class TestBatch12(PdfArrangerTest):
 
     def test_03_quit(self):
         self._quit_without_saving()
+
+
+class TestBatch13(PdfArrangerTest):
+    """Test export as png images"""
+
+    def test_01_import_pdf(self):
+        self._start(["tests/test.pdf"])
+
+    def test_02_export_as_png(self):
+        """Export image at default 150 DPI"""
+        self._popupmenu(None, ["Select", "Select All"])
+        self._mainmenu(["Export", "Export Selection to PNG Images…"])
+        self._save_as_chooser("image-001.png")
+
+    def test_03_import_png(self):
+        """Import the two images that were created"""
+        tmp = self.__class__.tmp
+        filename = os.path.join(tmp, "image-001.png")
+        filechooser = self._import_file(filename)
+        self._wait_cond(lambda: filechooser.dead)
+        filename = os.path.join(tmp, "image-002.png")
+        filechooser = self._import_file(filename)
+        self._wait_cond(lambda: filechooser.dead)
+        self.assertEqual(len(self._icons()), 4)
+        self._app().keyCombo("End")
+        self._assert_page_size(337.3, 436.6)
+
+    def test_04_quit(self):
+        self._quit_without_saving()
