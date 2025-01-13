@@ -470,7 +470,7 @@ class PasswordDialog(Gtk.Dialog):
             raise _UnknownPasswordException()
 
 
-def _img_to_pdf(images, tmp_dir):
+def _img_to_pdf(images, tmp_dir, page_size=None):
     """Wrap img2pdf.convert to handle some corner cases"""
     fd, pdf_file_name = tempfile.mkstemp(suffix=".pdf", dir=tmp_dir)
     os.close(fd)
@@ -499,8 +499,11 @@ def _img_to_pdf(images, tmp_dir):
                     bg.save(imgio, "PNG")
                     imgio.seek(0)
                     images[num] = imgio
+        kwargs = dict(rotation=rot)
+        if page_size is not None:
+            kwargs['layout_fun'] = img2pdf.get_layout_fun(page_size)
         try:
-            pdf = img2pdf.convert(images, rotation=rot)
+            pdf = img2pdf.convert(images, **kwargs)
         except ValueError as e:
             # Too small or large image
             raise PDFDocError(e)
