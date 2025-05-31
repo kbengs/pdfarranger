@@ -62,24 +62,26 @@ class Manager(object):
 
         1. The pages
         2. Which page numbers are selected
+        3. The vertical adjustment percentual value
         """
         pages = [row[0].duplicate(False) for row in self.model]
         s = self.app.iconview.get_selected_items()
         selection = [path.get_indices()[0] for path in s]
-        return (pages, selection, self.label)
+        vadj_percent = self.app.vadj_percent_handler()
+        return (pages, selection, vadj_percent, self.label)
 
     def undo(self, _action, _param, _unused):
         if self.current == len(self.states):
             self.states.append(self.get_state())
-        pages, selection, self.label = self.states[self.current - 1]
-        self.__set_state(pages, selection)
+        pages, selection, vadj_percent, self.label = self.states[self.current - 1]
+        self.__set_state(pages, selection, vadj_percent)
         self.current -= 1
         self.app.set_unsaved(True)
         self.__refresh()
 
     def redo(self, _action, _param, _unused):
-        pages, selection, self.label = self.states[self.current + 1]
-        self.__set_state(pages, selection)
+        pages, selection, vadj_percent, self.label = self.states[self.current + 1]
+        self.__set_state(pages, selection, vadj_percent)
         self.current += 1
         self.app.set_unsaved(True)
         self.__refresh()
@@ -89,7 +91,7 @@ class Manager(object):
         self.redoaction = redo
         self.__refresh()
 
-    def __set_state(self, pages, selection):
+    def __set_state(self, pages, selection, vadj_percent):
         self.app.quit_rendering()
         self.app.iconview.unselect_all()
         with self.app.render_lock():
@@ -101,6 +103,7 @@ class Manager(object):
                 self.model.append([page, page.description])
                 if num in selection:
                     self.app.iconview.select_path(self.model[-1].path)
+        self.app.vadj_percent = vadj_percent
         self.app.update_iconview_geometry()
         self.app.update_max_zoom_level()
         self.app.retitle()
