@@ -51,23 +51,35 @@ class Manager(object):
         :param label: label of the action
         """
         self.states = self.states[:self.current]
-        self.states.append(([row[0].duplicate(False) for row in self.model], self.label,))
+        self.states.append(self.get_state())
         self.current += 1
         self.label = label
         self.__refresh()
 
+    def get_state(self):
+        """
+        Return the content which should be saved:
+
+        1. The pages
+        2. Which page numbers are selected
+        """
+        pages = [row[0].duplicate(False) for row in self.model]
+        s = self.app.iconview.get_selected_items()
+        selection = [path.get_indices()[0] for path in s]
+        return (pages, selection, self.label)
+
     def undo(self, _action, _param, _unused):
         if self.current == len(self.states):
-            self.states.append(([row[0].duplicate(False) for row in self.model], self.label,))
-        state, self.label = self.states[self.current - 1]
-        self.__set_state(state)
+            self.states.append(self.get_state())
+        pages, selection, self.label = self.states[self.current - 1]
+        self.__set_state(pages, selection)
         self.current -= 1
         self.app.set_unsaved(True)
         self.__refresh()
 
     def redo(self, _action, _param, _unused):
-        state, self.label = self.states[self.current + 1]
-        self.__set_state(state)
+        pages, selection, self.label = self.states[self.current + 1]
+        self.__set_state(pages, selection)
         self.current += 1
         self.app.set_unsaved(True)
         self.__refresh()
@@ -77,16 +89,18 @@ class Manager(object):
         self.redoaction = redo
         self.__refresh()
 
-    def __set_state(self, state):
+    def __set_state(self, pages, selection):
         self.app.quit_rendering()
         self.app.iconview.unselect_all()
         with self.app.render_lock():
             self.model.clear()
-            for page in state:
+            for num, page in enumerate(pages):
                 # Do not reset the zoom level
                 page.zoom = self.app.zoom_scale
                 page.resample = -1
                 self.model.append([page, page.description])
+                if num in selection:
+                    self.app.iconview.select_path(self.model[-1].path)
         self.app.update_iconview_geometry()
         self.app.update_max_zoom_level()
         self.app.retitle()
