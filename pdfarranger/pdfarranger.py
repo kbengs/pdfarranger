@@ -90,8 +90,7 @@ VERSION = '1.12.1'
 WEBSITE = 'https://github.com/pdfarranger/pdfarranger'
 
 if os.name == 'nt':
-    import darkdetect
-    import keyboard  # to get control key state when drag to other instance
+    from winreg import HKEY_CURRENT_USER as hkey, QueryValueEx as getSubkeyValue, OpenKey as getKey
     # Add support for dnd to other instance and insert file at drop location in Windows
     os.environ['GDK_WIN32_USE_EXPERIMENTAL_OLE2_DND'] = 'true'
     # Use client side decorations. Will also enable window moving with Win + left/right
@@ -353,8 +352,11 @@ class PdfArranger(Gtk.Application):
         if Handy:
             try:
                 scheme = Handy.ColorScheme.PREFER_LIGHT
-                if os.name == 'nt' and darkdetect.isDark():
-                    scheme = Handy.ColorScheme.PREFER_DARK
+                if os.name == 'nt':
+                    key = getKey(hkey, "Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize")
+                    subkey = getSubkeyValue(key, "AppsUseLightTheme")[0]
+                    if subkey == 1:
+                        scheme = Handy.ColorScheme.PREFER_DARK
                 theme = self.config.theme()
                 if theme == 'dark':
                     scheme = Handy.ColorScheme.FORCE_DARK
@@ -2209,9 +2211,7 @@ class PdfArranger(Gtk.Application):
         self.iv_autoscroll(x, y, autoscroll_area=40)
 
         # Select move or copy dragAction
-        drag_move_posix = os.name == 'posix' and context.get_actions() & Gdk.DragAction.MOVE
-        drag_move_nt = os.name == 'nt' and not keyboard.is_pressed('control')
-        if drag_move_posix or drag_move_nt:
+        if context.get_actions() & Gdk.DragAction.MOVE:
             Gdk.drag_status(context, Gdk.DragAction.MOVE, etime)
         else:
             Gdk.drag_status(context, Gdk.DragAction.COPY, etime)
