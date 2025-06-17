@@ -91,7 +91,6 @@ WEBSITE = 'https://github.com/pdfarranger/pdfarranger'
 
 if os.name == 'nt':
     import darkdetect
-    import keyboard  # to get control key state when drag to other instance
     # Add support for dnd to other instance and insert file at drop location in Windows
     os.environ['GDK_WIN32_USE_EXPERIMENTAL_OLE2_DND'] = 'true'
     # Use client side decorations. Will also enable window moving with Win + left/right
@@ -2209,9 +2208,7 @@ class PdfArranger(Gtk.Application):
         self.iv_autoscroll(x, y, autoscroll_area=40)
 
         # Select move or copy dragAction
-        drag_move_posix = os.name == 'posix' and context.get_actions() & Gdk.DragAction.MOVE
-        drag_move_nt = os.name == 'nt' and not keyboard.is_pressed('control')
-        if drag_move_posix or drag_move_nt:
+        if context.get_actions() & Gdk.DragAction.MOVE:
             Gdk.drag_status(context, Gdk.DragAction.MOVE, etime)
         else:
             Gdk.drag_status(context, Gdk.DragAction.COPY, etime)
