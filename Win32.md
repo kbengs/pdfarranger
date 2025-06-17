@@ -30,7 +30,7 @@ For Python 3.12 or newer:
 
 ```
 export PATH=$PATH:/mingw64/bin
-/mingw64/bin/python3.exe -m pip install --user darkdetect pikepdf img2pdf
+/mingw64/bin/python3.exe -m pip install --user pikepdf img2pdf
 ```
 
 For Python 3.11 or older:
@@ -38,7 +38,7 @@ For Python 3.11 or older:
 ```
 export PATH=$PATH:/mingw64/bin
 SETUPTOOLS_USE_DISTUTILS=stdlib \
- /mingw64/bin/python3.exe -m pip install --user darkdetect pikepdf img2pdf
+ /mingw64/bin/python3.exe -m pip install --user pikepdf img2pdf
 ```
 
 ## Building PDF Arranger
