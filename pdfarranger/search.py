@@ -149,7 +149,7 @@ class SearchBarWidget(Gtk.SearchBar):
         if text == "":
             return
         text_changed = text != self.text_old
-        page_changed = self.model[self.npage][0].__repr__() != self.page.__repr__()
+        page_changed = self.model[self.npage][0][0].__repr__() != self.page.__repr__()
         if text_changed or page_changed:
             # Search in current page
             self.rectangles = self.find_text(self.npage, text)
@@ -181,7 +181,7 @@ class SearchBarWidget(Gtk.SearchBar):
         if len(self.model) == 0:
             return []
         npage = min(npage, len(self.model) - 1)
-        self.page = self.model[npage][0].duplicate(incl_thumbnail=False)
+        self.page = self.model[npage][0][0].duplicate(incl_thumbnail=False)
         page = self.page.duplicate(incl_thumbnail=False)
         page.rotate(-page.angle)
         crop = page.crop

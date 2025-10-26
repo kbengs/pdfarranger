@@ -36,23 +36,24 @@ def scale(model, selection, factor):
         width, height = None, None
     for path in selection:
         it = model.get_iter(path)
-        page = model.get_value(it, 0)
-        page_size = page.size.cropped(page.crop)
-        if width is None:
-            f = factor
-        else:
-            # TODO: allow to change aspect ratio
-            f = min(*Dims(width, height) / page_size)
-        # Page size must be in [72, 14400] (PDF standard requirement)
-        f = max(f, *(Dims(72, 72) / page_size))
-        f = min(f, *(Dims(14400, 14400) / page_size))
-        if page.scale != f:
-            changed = True
-        page.resample = page.resample * f / page.scale
-        for lp in page.layerpages:
-            lp.scale = lp.scale * f / page.scale
-        page.scale = f
-        model.set_value(it, 0, page)
+        group = model.get_value(it, 0)
+        for page in group:
+            page_size = page.size.cropped(page.crop)
+            if width is None:
+                f = factor
+            else:
+                # TODO: allow to change aspect ratio
+                f = min(*Dims(width, height) / page_size)
+            # Page size must be in [72, 14400] (PDF standard requirement)
+            f = max(f, *(Dims(72, 72) / page_size))
+            f = min(f, *(Dims(14400, 14400) / page_size))
+            if page.scale != f:
+                changed = True
+            page.resample = page.resample * f / page.scale
+            for lp in page.layerpages:
+                lp.scale = lp.scale * f / page.scale
+            page.scale = f
+        model.set_value(it, 0, group)
     return changed
 
 
@@ -342,7 +343,7 @@ class ScaleDialog(BaseDialog):
     def __init__(self, model, selection, window):
         super().__init__(title=_("Page size"), parent=window)
         self.set_resizable(False)
-        page = model.get_value(model.get_iter(selection[-1]), 0)
+        page = model.get_value(model.get_iter(selection[-1]), 0)[0]
         paper_widget = PaperSizeWidget(page.size_in_mm(), margin=1)
         paper_widget.attach(Gtk.Label(_("Fit mode"), halign=Gtk.Align.START), 1, 5, 1, 1)
         self.combo = Gtk.ComboBoxText()
@@ -374,7 +375,11 @@ class ScaleDialog(BaseDialog):
 
 
 def white_borders(model, selection, pdfqueue):
-    pages = [model[row][0].duplicate(incl_thumbnail=False) for row in selection]
+    pages = []
+    for row in selection:
+        group = model[row][0]
+        for page in group:
+            pages.append(page.duplicate(incl_thumbnail=False))
     # Hidden parts are white and will be cropped also
     orig_crops = [p.crop.max(p.hide) for p in pages]
     # Create the temporary document without crops. They will be applied later
@@ -569,7 +574,7 @@ class _OffsetWidget(Gtk.Frame):
     def set_model(self, damodel):
         """Allow the widget access to the model to read page sizes and resize the pasted page"""
         self.damodel = damodel
-        lpage = damodel[1][0]
+        lpage = damodel[1][0][0]
         self.scale_old = [lpage.scale] + [lp.scale for lp in lpage.layerpages]
 
     def spinb_val_changed(self, spinbutton):
@@ -584,7 +589,8 @@ class _OffsetWidget(Gtk.Frame):
 
         # Calculate the needed rescale
         if cursor_name != 'move':
-            dpage, lpage = [page for [page] in self.damodel]
+            dpage = self.damodel[0][0][0]
+            lpage = self.damodel[1][0][0]
             dw, dh = dpage.size_in_pixel()
             lw, lh = lpage.size_in_pixel()
             rw = max(10, dw * (1 - values.left - values.right))
@@ -638,7 +644,8 @@ class _OffsetWidget(Gtk.Frame):
 
         The 'transform scale' factor scales between the two ways of expressing the offset.
         """
-        dpage, lpage = [page for [page] in self.damodel]
+        dpage = self.damodel[0][0][0]
+        lpage = self.damodel[1][0][0]
         dw, dh = dpage.size_in_pixel()
         lw, lh = lpage.size_in_pixel()
         scalex = 100 * dw / (dw - lw) if dw - lw != 0 else 1e10
@@ -655,7 +662,7 @@ class DrawingAreaWidget(Gtk.Box):
         page.thumbnail = page.thumbnail if page.crop == Sides() else None
         page.resample = -1
         self.damodel = Gtk.ListStore(GObject.TYPE_PYOBJECT)
-        self.damodel.append([page])
+        self.damodel.append([[page]])
         self.pdfqueue = pdfqueue
         self.spinbutton_widget = spinbutton_widget
         self.padding = 25  # Around thumbnail
@@ -759,13 +766,14 @@ class DrawingAreaWidget(Gtk.Box):
         va.set_value(self.padding + thmb_y - sw_y)
 
     def set_zoom(self, da_rect):
-        dpage = self.damodel[0][0]
+        dpage = self.damodel[0][0][0]
         thmb_max_w = da_rect.width - self.padding * 2
         thmb_max_h = da_rect.height - self.padding * 2
         zoom_x = thmb_max_w / dpage.width_in_points()
         zoom_y = thmb_max_h / dpage.height_in_points()
-        for [page] in self.damodel:
-            page.zoom = min(zoom_x, zoom_y)
+        for [group] in self.damodel:
+            for page in group:
+                page.zoom = min(zoom_x, zoom_y)
 
     def silent_render(self):
         if self.render_id:
@@ -793,7 +801,7 @@ class DrawingAreaWidget(Gtk.Box):
         if thumbnail is None:
             return
         path = ref.get_path()
-        page = self.damodel[path][0]
+        page = self.damodel[path][0][0]
         page.thumbnail = thumbnail
         self.draw_page()
 
@@ -868,7 +876,7 @@ class DrawingAreaWidget(Gtk.Box):
             return
         self.quit_rendering()
         left, right, top, bottom = self.spinbutton_widget.get_val()
-        page = self.damodel[0][0]
+        page = self.damodel[0][0][0]
         if self.cursor_name in ['w-resize', 'nw-resize', 'sw-resize', 'move']:
             left = self.click_val[0] + ((event.x - self.click_pos[0]) / page.width_in_pixel())
         if self.cursor_name in ['e-resize', 'ne-resize', 'se-resize', 'move']:
@@ -909,7 +917,7 @@ class DrawingAreaWidget(Gtk.Box):
         """Draw the 'destination' thumbnail page."""
         if len(self.damodel) == 0 or self.surface is None:
             return
-        dpage = self.damodel[0][0]
+        dpage = self.damodel[0][0][0]
         if dpage.thumbnail is None:
             return
         cr = cairo.Context(self.surface)
@@ -1000,12 +1008,16 @@ class DrawingAreaWidget(Gtk.Box):
 class CropHideDialog():
     def __init__(self, window, selection, model, pdfqueue, is_unsaved, mode, update_val_func):
         title = _("Crop Margins") if mode == 'CROP' else _("Hide Margins")
-        init_values = [getattr(model[row][0], mode.lower()) for row in selection]
+        init_values = []
+        for row in selection:
+            group = model[row][0]
+            for page in group:
+                init_values.append(getattr(page, mode.lower()))
         self.updated_values = init_values
         self.spinbutton_widget = _CropHideWidget(list(init_values[-1]), margin=8)
-        page = model[selection[-1]][0]
+        page = model[selection[-1]][0][0]
         dawidget = DrawingAreaWidget(page, pdfqueue, self.spinbutton_widget, self.draw_on_page)
-        page = dawidget.damodel[0][0]
+        page = dawidget.damodel[0][0][0]
         page.hide = page.crop if mode == 'HIDE' else page.hide
         page.crop = Sides()
 
@@ -1043,7 +1055,7 @@ class CropHideDialog():
         if response in [Gtk.ResponseType.OK, Gtk.ResponseType.APPLY]:
             new_val = self.spinbutton_widget.get_val()
             if any([new_val != val for val in self.updated_values]):
-                self.updated_values = [new_val] * len(selection)
+                self.updated_values = [new_val] * len(init_values)
                 update_val_func(self.updated_values, selection, True)
         if response == Gtk.ResponseType.APPLY:
             return
@@ -1063,7 +1075,7 @@ class PastePageLayerDialog():
         dawidget = DrawingAreaWidget(dpage, pdfqueue, self.spinbutton_widget, self.draw_on_page)
         dawidget.allow_side_resize = False
         dawidget.handle_move_limits = False
-        dawidget.damodel.append([lpage])
+        dawidget.damodel.append([[lpage]])
         self.spinbutton_widget.set_model(dawidget.damodel)
 
         self.dialog = BaseDialog(title, window)
@@ -1073,7 +1085,7 @@ class PastePageLayerDialog():
 
     def draw_on_page(self, cr, dx, dy, dw, dh, damodel):
         """Draw on the thumbnail page."""
-        dpage, lpage = [page for [page] in damodel]
+        dpage, lpage = [page for [[page]] in damodel]
         if lpage.thumbnail is None:
             return [0] * 4
 

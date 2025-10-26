@@ -36,7 +36,7 @@ class ImageExporter:
         for page in pages:
             page.zoom = config.image_ppi() / 72  # pdf is 72 dpi
             page.resample = -1
-            self.model.append([page])
+            self.model.append([[page]])
         self.ppi = config.image_ppi()
         self.optimize = config.optimize()
         self.greyscale = config.greyscale()
@@ -76,7 +76,7 @@ class ImageExporter:
             self.is_saving = False
             return
         path = ref.get_path()
-        page = self.model[path][0]
+        page = self.model[path][0][0]
         ind = Gtk.TreePath.get_indices(path)[0]
 
         w = thumbnail.get_width()

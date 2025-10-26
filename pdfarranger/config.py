@@ -66,6 +66,8 @@ _DEFAULT_ACCELS = [
     ('find', '<Primary>f'),
     ('find_prev', '<Shift>F3'),
     ('find_next', 'F3'),
+    ('group-pages', 'g'),
+    ('ungroup-pages', 'u'),
 ]
 
 

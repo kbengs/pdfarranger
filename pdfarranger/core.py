@@ -271,6 +271,22 @@ class Dims(NamedTuple):
         return Dims(self.width * (1 - crop.left - crop.right), self.height * (1 - crop.top - crop.bottom))
 
 
+class Group(list):
+    def front_page(self):
+        return self[0]
+
+    def is_grouped(self):
+        return len(self) > 1
+
+    def duplicate(self):
+        page_list = []
+        for page in self:
+            p = page.duplicate(incl_thumbnail)
+            page_list.append(p)
+        return page_list
+
+
+
 class BasePage:
     """Common base class for Page and LayerPage"""
 
@@ -695,7 +711,17 @@ class PageAdder:
             layerpages.append(LayerPage(*ld))
         return layerpages
 
-    def addpages(self, filename, page=-1, description=None, angle=0, scale=1.0, crop=Sides(0, 0, 0, 0), hide=Sides(0, 0, 0, 0), layerdata=None):
+    def add_grouped(self, group_data):
+        group = []
+        for page_data in group_data:
+            added = self.addpages(*page_data)
+            if not added:
+                return False
+            group.append(self.pages.pop()[0])
+        self.pages.append(group)
+        return True
+
+    def addpages(self, filename, page=-1, description=None, angle=0, scale=1.0, crop=Sides(0, 0, 0, 0), hide=Sides(0, 0, 0, 0), layerdata=None, add_grouped=True):
         """Add PDF files, images or copied pages as Page objects to self.pages list
 
         Returns: True if pages actually were added (no exception)
@@ -723,6 +749,8 @@ class PageAdder:
         if layerpages is None:
             return False
 
+        group = []
+
         for npage in range(n_start, n_end + 1):
             page = pdfdoc.document.get_page(npage - 1)
             if description is None:
@@ -730,7 +758,7 @@ class PageAdder:
                 desc = "".join([shortname, "\n", _("page"), " ", str(npage)])
             else:
                 desc = description
-            self.pages.append(
+            group.append(
                 Page(
                     nfile,
                     npage,
@@ -745,9 +773,14 @@ class PageAdder:
                     layerpages,
                 )
             )
+        if add_grouped:  # and grouping selected in config
+            self.pages.append(group)
+        else:
+            for page in group:
+                self.pages.append([page])
         return True
 
-    def commit(self, select_added, add_to_undomanager):
+    def commit(self, select_added=False, add_to_undomanager=False):
         if len(self.pages) == 0:
             return False
         if add_to_undomanager:
@@ -759,7 +792,12 @@ class PageAdder:
             self.pages.reverse()
         with self.app.render_lock():
             for p in self.pages:
-                m = [p, p.description]
+                description = p[0].description
+                if len(p) > 1:
+                    # It's a group: a list of pages
+                    description = description.split(" + ", 1)[0]
+                    description += " + {} more".format(len(p) - 1)
+                m = [p, description]
                 if self.treerowref:
                     iter_to = self.app.model.get_iter(self.treerowref.get_path())
                     if self.before:
@@ -829,7 +867,7 @@ class PDFRenderer(threading.Thread, GObject.GObject):
                     break
                 path = Gtk.TreePath.new_from_indices([num])
                 ref = Gtk.TreeRowReference.new(self.model, path)
-                p = self.model[path][0].duplicate()
+                p = self.model[path][0][0].duplicate()
             if p.resample != 1 / p.zoom:
                 self.update(p, ref, p.zoom, False)
         mem_limit = False
@@ -842,7 +880,7 @@ class PDFRenderer(threading.Thread, GObject.GObject):
                         continue
                     path = Gtk.TreePath.new_from_indices([num])
                     ref = Gtk.TreeRowReference.new(self.model, path)
-                    p = self.model[path][0].duplicate()
+                    p = self.model[path][0][0].duplicate()
                 if off <= self.columns_nr * 5:
                     # Thumbnail
                     zoom = p.zoom

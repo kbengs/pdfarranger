@@ -30,7 +30,7 @@ from .core import Page
 @dataclass
 class State:
     label: str
-    pages: list[Page]
+    items: list[list[Page, str]]
     selection: list[int]
     vadj_percent: float
 
@@ -72,15 +72,20 @@ class Manager(object):
         Get the content which should be saved:
 
         1. The label of the action
-        2. The pages
+        2. The item: group of pages + description
         3. Which page numbers are selected
         4. The vertical adjustment percent value
         """
-        pages = [row[0].duplicate(False) for row in self.model]
+        items = []
+        for group, description in self.model:
+            pages = []
+            for page in group:
+                pages.append(page.duplicate(False))
+            items.append([pages, description])
         s = self.app.iconview.get_selected_items()
         selection = [path.get_indices()[0] for path in s]
         vadj_percent = self.app.vadj_percent_handler()
-        return State(self.label, pages, selection, vadj_percent)
+        return State(self.label, items, selection, vadj_percent)
 
     def undo(self, _action, _param, _unused):
         if self.current == len(self.states):
@@ -106,11 +111,12 @@ class Manager(object):
         self.app.iconview.unselect_all()
         with self.app.render_lock():
             self.model.clear()
-            for page in state.pages:
+            for group, description in state.items:
                 # Do not reset the zoom level
-                page.zoom = self.app.zoom_scale
-                page.resample = -1
-                self.model.append([page, page.description])
+                for page in reversed(group):
+                    page.zoom = self.app.zoom_scale
+                    page.resample = -1
+                self.model.append([group, description])
         for num in state.selection:
             self.app.iconview.select_path(self.model[num].path)
         self.app.vadj_percent = state.vadj_percent

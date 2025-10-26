@@ -563,5 +563,20 @@ along with PDF Arranger.  If not, see <http://www.gnu.org/licenses/>.
         </section>
       </submenu>
     </section>
+    <section>
+      <submenu>
+        <attribute name="label" translatable="yes">Group/Ungroup</attribute>
+        <section>
+          <item>
+            <attribute name="label" translatable="yes">_Group pages</attribute>
+            <attribute name="action">win.group-pages</attribute>
+          </item>
+          <item>
+            <attribute name="label" translatable="yes">_Ungroup pages</attribute>
+            <attribute name="action">win.ungroup-pages</attribute>
+          </item>
+        </section>
+      </submenu>
+    </section>
   </menu>
 </interface>

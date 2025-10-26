@@ -25,9 +25,11 @@ class CellRendererImage(Gtk.CellRenderer):
         self.th1 = 2.  # border thickness
         self.th2 = 3.  # shadow thickness
         self.page = None
+        self.is_grouped = False
 
-    def set_page(self, page):
-        self.page = page
+    def set_page(self, group):
+        self.page = group[0]
+        self.is_grouped = len(group) > 1
 
     def get_geometry(self):
         rotation = int(self.page.angle) % 360
@@ -60,7 +62,8 @@ class CellRendererImage(Gtk.CellRenderer):
         window.translate(int(0.5 + x), int(0.5 + y))
 
         # shadow
-        window.set_source_rgb(0.5, 0.5, 0.5)
+        alpha = int(self.is_grouped)
+        window.set_source_rgba(0.5, 0.5, 0.5, alpha)
         window.rectangle(th, th, w2, h2)
         window.fill()
 
