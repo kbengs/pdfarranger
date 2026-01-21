@@ -33,10 +33,6 @@ jobs:
     container:
       image: ghcr.io/kbengs/pdfarranger-qpdf-pikepdf-dev-docker-ci:1.0.0
     steps:
-      - name: Check version
-        run: |
-          node -v
-          echo "Processing version: ${{ github.event.inputs.version }}"
       - name: Build libqpdf
         run: |
           git clone https://github.com/qpdf/qpdf.git
