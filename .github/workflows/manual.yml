@@ -1,0 +1,75 @@
+on:
+  workflow_dispatch:
+    inputs:
+      logLevel:
+        description: 'Log level'
+        required: true
+        default: 'debug'
+        type: choice
+        options:
+        - info
+        - warning
+        - debug
+      tags:
+        description: 'Test scenario tags'
+        required: false
+        type: boolean
+      environment:
+        description: 'Environment to run tests against'
+        type: environment
+        required: true
+jobs:
+  log-the-inputs:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/kbengs/pdfarranger-qpdf-pikepdf-dev-docker-ci:1.0.0
+    steps:
+      - run: |
+          echo "Log level: $LEVEL"
+          echo "Tags: $TAGS"
+          echo "Environment: $ENVIRONMENT"
+        env:
+          LEVEL: ${{ inputs.logLevel }}
+          TAGS: ${{ inputs.tags }}
+          ENVIRONMENT: ${{ inputs.environment }}
+  test-qpdf-pikepdf-from-main:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/kbengs/pdfarranger-qpdf-pikepdf-dev-docker-ci:1.0.0
+    steps:
+      - name: Check version
+        run: |
+          node -v
+          echo "Processing version: ${{ github.event.inputs.version }}"
+      - name: Build libqpdf
+        run: |
+          git clone https://github.com/qpdf/qpdf.git
+          cd /work/qpdf
+          QPDF_SOURCE_TREE=$PWD
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_SHARED_LIBS=ON
+          cmake --build build --parallel --target libqpdf
+          QPDF_BUILD_LIBDIR=$PWD/build/libqpdf
+      - name: Build pikepdf
+        run: |
+          git clone https://github.com/pikepdf/pikepdf.git
+          cd /work/pikepdf
+          env QPDF_SOURCE_TREE=$QPDF_SOURCE_TREE QPDF_BUILD_LIBDIR=$QPDF_BUILD_LIBDIR \
+          /work/virtenv/bin/pip install -e .
+      - name: clone pdfarranger
+        run: |
+          git clone https://github.com/pdfarranger/pdfarranger.git
+      - name: Dogtail Tests
+        run: |
+          cd /work/pdfarranger
+          . /work/virtenv/bin/activate
+          python3 -X tracemalloc -u -m unittest -v -f tests.test
+      - name: Exporter Tests
+        run: |
+          cd /work/pdfarranger
+          . /work/virtenv/bin/activate
+          python3 -X tracemalloc -u -m unittest -v -f tests.test_exporter
+      - name: Core Tests
+        run: |
+          cd /work/pdfarranger
+          . /work/virtenv/bin/activate
+          python3 -X tracemalloc -u -m unittest -v -f tests.test_core
