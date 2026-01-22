@@ -10,25 +10,8 @@ on:
         - info
         - warning
         - debug
-      tags:
-        description: 'Test scenario tags'
-        required: false
-        type: boolean
 jobs:
-  log-the-inputs:
-    runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/kbengs/pdfarranger-qpdf-pikepdf-dev-docker-ci:1.0.0
-    steps:
-      - run: |
-          echo "Log level: $LEVEL"
-          echo "Tags: $TAGS"
-          echo "Environment: $ENVIRONMENT"
-        env:
-          LEVEL: ${{ inputs.logLevel }}
-          TAGS: ${{ inputs.tags }}
-          ENVIRONMENT: ${{ inputs.environment }}
-  test-qpdf-pikepdf-from-main:
+  test-qpdf-pikepdf-main-branch:
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/kbengs/pdfarranger-qpdf-pikepdf-dev-docker-ci:1.0.0
