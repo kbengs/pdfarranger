@@ -32,14 +32,11 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/kbengs/pdfarranger-qpdf-pikepdf-dev-docker-ci:1.0.0
-    defaults:
-      run:
-        shell: bash
-        working-directory: ./work
     steps:
       - name: Build libqpdf
         run: |
           pwd
+          ls
           git clone https://github.com/qpdf/qpdf.git
           cd qpdf
           QPDF_SOURCE_TREE=$PWD
