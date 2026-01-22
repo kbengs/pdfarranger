@@ -32,11 +32,16 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/kbengs/pdfarranger-qpdf-pikepdf-dev-docker-ci:1.0.0
+    defaults:
+      run:
+        shell: bash
+        working-directory: ./work
     steps:
       - name: Build libqpdf
         run: |
+          pwd
           git clone https://github.com/qpdf/qpdf.git
-          cd /work/qpdf
+          cd qpdf
           QPDF_SOURCE_TREE=$PWD
           cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_SHARED_LIBS=ON
           cmake --build build --parallel --target libqpdf
@@ -44,24 +49,24 @@ jobs:
       - name: Build pikepdf
         run: |
           git clone https://github.com/pikepdf/pikepdf.git
-          cd /work/pikepdf
+          cd pikepdf
           env QPDF_SOURCE_TREE=$QPDF_SOURCE_TREE QPDF_BUILD_LIBDIR=$QPDF_BUILD_LIBDIR \
-          /work/virtenv/bin/pip install -e .
+          ./virtenv/bin/pip install -e .
       - name: clone pdfarranger
         run: |
           git clone https://github.com/pdfarranger/pdfarranger.git
       - name: Dogtail Tests
         run: |
-          cd /work/pdfarranger
-          . /work/virtenv/bin/activate
+          . ./virtenv/bin/activate
+          cd pdfarranger
           python3 -X tracemalloc -u -m unittest -v -f tests.test
       - name: Exporter Tests
         run: |
-          cd /work/pdfarranger
-          . /work/virtenv/bin/activate
+          . ./virtenv/bin/activate
+          cd pdfarranger
           python3 -X tracemalloc -u -m unittest -v -f tests.test_exporter
       - name: Core Tests
         run: |
-          cd /work/pdfarranger
-          . /work/virtenv/bin/activate
+          . ./virtenv/bin/activate
+          cd pdfarranger
           python3 -X tracemalloc -u -m unittest -v -f tests.test_core
