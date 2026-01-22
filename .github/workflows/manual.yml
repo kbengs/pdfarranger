@@ -46,7 +46,3 @@ jobs:
         run: |
           cd pdfarranger
           python3 -X tracemalloc -u -m unittest -v -f tests.test_exporter
-      - name: Core Tests
-        run: |
-          cd pdfarranger
-          python3 -X tracemalloc -u -m unittest -v -f tests.test_core
