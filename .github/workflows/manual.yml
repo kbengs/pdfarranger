@@ -35,35 +35,35 @@ jobs:
     steps:
       - name: Build libqpdf
         run: |
-          pwd
-          ls
           git clone https://github.com/qpdf/qpdf.git
           cd qpdf
-          QPDF_SOURCE_TREE=$PWD
+          echo QPDF_SOURCE_TREE=$PWD >> $GITHUB_ENV
           cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_SHARED_LIBS=ON
           cmake --build build --parallel --target libqpdf
-          QPDF_BUILD_LIBDIR=$PWD/build/libqpdf
+          echo QPDF_BUILD_LIBDIR=$PWD/build/libqpdf >> $GITHUB_ENV
+      - name: Set up venv
+        run: |
+          python3 -m venv --system-site-packages virtenv
+          echo "$GITHUB_WORKSPACE/virtenv/bin" >> $GITHUB_PATH
+          echo "VIRTUAL_ENV=$GITHUB_WORKSPACE/virtenv" >> $GITHUB_ENV
       - name: Build pikepdf
         run: |
           git clone https://github.com/pikepdf/pikepdf.git
           cd pikepdf
           env QPDF_SOURCE_TREE=$QPDF_SOURCE_TREE QPDF_BUILD_LIBDIR=$QPDF_BUILD_LIBDIR \
-          ./virtenv/bin/pip install -e .
+          pip install -e .
       - name: clone pdfarranger
         run: |
           git clone https://github.com/pdfarranger/pdfarranger.git
       - name: Dogtail Tests
         run: |
-          . ./virtenv/bin/activate
           cd pdfarranger
           python3 -X tracemalloc -u -m unittest -v -f tests.test
       - name: Exporter Tests
         run: |
-          . ./virtenv/bin/activate
           cd pdfarranger
           python3 -X tracemalloc -u -m unittest -v -f tests.test_exporter
       - name: Core Tests
         run: |
-          . ./virtenv/bin/activate
           cd pdfarranger
           python3 -X tracemalloc -u -m unittest -v -f tests.test_core
