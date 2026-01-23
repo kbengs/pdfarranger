@@ -35,14 +35,11 @@ jobs:
           cd pikepdf
           env QPDF_SOURCE_TREE=$QPDF_SOURCE_TREE QPDF_BUILD_LIBDIR=$QPDF_BUILD_LIBDIR \
           pip install -e .
-      - name: clone pdfarranger
-        run: |
-          git clone https://github.com/pdfarranger/pdfarranger.git
+      - name: Checkout pdfarranger Git repository
+        uses: actions/checkout@v6
+      - name: Install pdfaranger
+        run: pip install -v .[image]
       - name: Dogtail Tests
-        run: |
-          cd pdfarranger
-          python3 -X tracemalloc -u -m unittest -v -f tests.test
+        run: python3 -X tracemalloc -u -m unittest -v -f tests.test
       - name: Exporter Tests
-        run: |
-          cd pdfarranger
-          python3 -X tracemalloc -u -m unittest -v -f tests.test_exporter
+        run: python3 -X tracemalloc -u -m unittest -v -f tests.test_exporter
