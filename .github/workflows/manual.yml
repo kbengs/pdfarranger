@@ -16,6 +16,8 @@ jobs:
     container:
       image: ghcr.io/kbengs/pdfarranger-qpdf-pikepdf-dev-docker-ci:1.0.0
     steps:
+      - name: Checkout pdfarranger Git repository
+        uses: actions/checkout@v6
       - name: Build libqpdf
         run: |
           git clone https://github.com/qpdf/qpdf.git
@@ -35,8 +37,6 @@ jobs:
           cd pikepdf
           env QPDF_SOURCE_TREE=$QPDF_SOURCE_TREE QPDF_BUILD_LIBDIR=$QPDF_BUILD_LIBDIR \
           pip install -e .
-      - name: Checkout pdfarranger Git repository
-        uses: actions/checkout@v6
       - name: Install pdfaranger
         run: pip install -v .[image]
       - name: Dogtail Tests
